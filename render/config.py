@@ -22,9 +22,9 @@ MODEL = {
     "min_age_hours": 3.5,
 }
 
-# Forecast hours to render. 0–120 by 6 is 21 frames; extend to 240/384 once
-# you know your Actions runtime budget.
-FORECAST_HOURS = list(range(0, 121, 6))
+# Forecast hours to render. GFS is 3-hourly to 240 h, then 12-hourly to 384 h,
+# so 6-hourly to 240 and 12-hourly beyond: 51 frames.
+FORECAST_HOURS = list(range(0, 241, 6)) + list(range(252, 361, 12))
 
 # How many runs to keep in site/images (older ones are pruned).
 KEEP_RUNS = 2
@@ -36,6 +36,8 @@ REGIONS = {
     "natl":  {"name": "North Atlantic", "bbox": (-100, -10, 5, 45)},
     "epac":  {"name": "East Pacific",   "bbox": (-150, -85, 3, 35)},
     "namer": {"name": "North America",  "bbox": (-140, -50, 12, 62)},
+    "gulf":  {"name": "Gulf & Florida",  "bbox": (-100, -74, 16, 33)},
+    "carib": {"name": "Caribbean",       "bbox": (-92, -55, 7, 28)},
 }
 
 # Parameters. `fetch` lists grib_filter var/lev pairs; `plot` is the function

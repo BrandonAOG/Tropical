@@ -41,6 +41,9 @@
   }
   .brand { font-family: "Barlow Condensed", sans-serif; font-weight: 700; font-size: 24px; letter-spacing: .01em; }
   .brand small { font-family: "Barlow", sans-serif; font-weight: 500; font-size: 13px; color: var(--muted); margin-left: 10px; letter-spacing: 0; }
+  nav { display: flex; gap: 4px; margin-left: 8px; }
+  nav a { text-decoration: none; color: var(--muted); padding: 6px 12px; border-radius: var(--radius); font-weight: 500; }
+  nav a.active { background: var(--teal-soft); color: #0a5960; font-weight: 600; }
   .runs { margin-left: auto; display: flex; align-items: center; gap: 8px; }
   .runs label { color: var(--muted); font-size: 13px; }
   .chip {
@@ -138,7 +141,8 @@
     .readout .hour { font-size: 36px; }
     .controls { justify-content: flex-end; }
     .hint { display: none; }
-    header { gap: 10px; padding: 10px 12px; }
+    header { gap: 10px; padding: 10px 12px; flex-wrap: wrap; }
+    .brand small { display: none; }
     .updated { display: none; }
   }
   @media (prefers-reduced-motion: no-preference) {
@@ -150,6 +154,10 @@
 
 <header>
   <div class="brand">WxModels <small id="modelName">GFS 0.25°</small></div>
+  <nav>
+    <a href="index.html" class="active">Models</a>
+    <a href="tropical.html">Tropical</a>
+  </nav>
   <div class="runs">
     <label for="runChips">Run</label>
     <div id="runChips" style="display:flex;gap:6px"></div>
