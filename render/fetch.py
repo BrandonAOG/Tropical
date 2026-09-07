@@ -525,7 +525,9 @@ def load_grib_members(path: Path, tag: str = "", bbox=None) -> dict:
                 mem = "c00" if num == 0 else f"p{num:02d}"
                 name = ec.codes_get(h, "shortName")
                 if name in ("unknown", "~", ""):
-                    name = f"p{ec.codes_get(h, 'paramId')}"
+                    # unambiguous WMO identity: discipline / category / number (see WMO_NAMES)
+                    name = f"d{ec.codes_get(h, 'discipline')}c{ec.codes_get(h, 'parameterCategory')}n{ec.codes_get(h, 'parameterNumber')}"
+                name = WMO_NAMES.get(name, name)
                 tol = ec.codes_get(h, "typeOfLevel"); lev = ec.codes_get(h, "level")
                 if tol == "isobaricInhPa":
                     key = f"{name}{int(lev)}"
@@ -701,7 +703,8 @@ def cmc_urls(run: dt.datetime, step: int, pairs: set, session: requests.Session 
         if not tok:
             continue
         token = tok.format(lev=int(lev)) if lev is not None else tok
-        urls.append(CMC_DIR.format(ymd=ymd, hh=hh, fhr=step) + CMC_FILE.format(ymd=ymd, hh=hh, token=token, fhr=step))
+        st = 0 if name == "lsm" else step          # land mask is a static field published at hour 0 only
+        urls.append(CMC_DIR.format(ymd=ymd, hh=hh, fhr=st) + CMC_FILE.format(ymd=ymd, hh=hh, token=token, fhr=st))
     return urls
 
 
@@ -933,6 +936,12 @@ class Fields(dict):
     lat: np.ndarray
 
 
+# WMO discipline/category/number -> our names, for fields eccodes labels "unknown"
+# (Environment Canada's GRIB uses templates eccodes doesn't always resolve).
+WMO_NAMES = {"d0c1n8": "tp", "d0c7n6": "cape", "d0c1n11": "snod", "d2c0n0": "lsm", "d0c0n17": "skt",
+             "d0c3n1": "prmsl", "d0c1n3": "pwat", "d0c0n0": "t", "d0c2n2": "u", "d0c2n3": "v", "d0c3n5": "gh",
+             "d0c1n1": "r", "d0c2n10": "absv", "d0c3n0": "pres", "d0c1n7": "prate", "d0c16n196": "refc"}
+
 # Names eccodes gives GFS/ECMWF fields at fixed heights -> the names plots.py uses
 HEIGHT_NAMES = {"2t": "t2m", "10u": "u10", "10v": "v10", "2r": "rh2m", "2d": "d2m", "10si": "si10"}
 
@@ -962,7 +971,9 @@ def load_grib(path: Path, tag: str = "") -> Fields:
             try:
                 name = ec.codes_get(h, "shortName")
                 if name in ("unknown", "~", ""):
-                    name = f"p{ec.codes_get(h, 'paramId')}"
+                    # unambiguous WMO identity: discipline / category / number (see WMO_NAMES)
+                    name = f"d{ec.codes_get(h, 'discipline')}c{ec.codes_get(h, 'parameterCategory')}n{ec.codes_get(h, 'parameterNumber')}"
+                name = WMO_NAMES.get(name, name)
                 tol = ec.codes_get(h, "typeOfLevel")
                 lev = ec.codes_get(h, "level")
                 step_type = ec.codes_get(h, "stepType")

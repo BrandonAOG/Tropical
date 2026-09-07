@@ -130,15 +130,19 @@ def plot_city(cid, name, lat, lon, data, init, dest: Path):
     rows = []
     for (mid, label, color), d in data:
         t = d["time"]
-        if "wind_gusts_10m" in d:
+        if "wind_gusts_10m" in d and np.isfinite(d["wind_gusts_10m"]).any():
             g = d["wind_gusts_10m"]
+            g = g[np.isfinite(g).any(axis=1)]                 # drop members that are entirely empty
             ax_g.fill_between(t, np.nanpercentile(g, 10, axis=0), np.nanpercentile(g, 90, axis=0), color=color, alpha=0.10, lw=0)
             ax_g.plot(t, np.nanmean(g, axis=0), color=color, lw=2, label=f"{label} ({g.shape[0]})")
-            peak = np.nanmax(np.nanmean(g, axis=0)); when = t[int(np.nanargmax(np.nanmean(g, axis=0)))]
+            mean_g = np.nanmean(g, axis=0)
+            if not np.isfinite(mean_g).any():
+                continue
+            peak = np.nanmax(mean_g); when = t[int(np.nanargmax(np.nan_to_num(mean_g, nan=-1)))]
             p64 = 100 * np.nanmean(np.nanmax(g, axis=1) >= 64); p34 = 100 * np.nanmean(np.nanmax(g, axis=1) >= 34)
             rows.append((label, peak, when, p34, p64, g.shape[0]))
-        if "precipitation" in d:
-            t6, p6 = six_hourly(t, d["precipitation"])
+        if "precipitation" in d and np.isfinite(d["precipitation"]).any():
+            t6, p6 = six_hourly(t, np.nan_to_num(d["precipitation"], nan=0.0))
             ax_r.fill_between(t6, np.nanpercentile(p6, 10, axis=0), np.nanpercentile(p6, 90, axis=0), color=color, alpha=0.10, lw=0)
             ax_r.plot(t6, np.nanmean(p6, axis=0), color=color, lw=2)
     top = min(160, max(60, 10 * int(np.ceil((max([r[1] for r in rows] + [40]) * 1.25) / 10))))
@@ -185,11 +189,14 @@ def main():
         data = []
         for i, (mid, label, color) in enumerate(ENSEMBLES):
             d = synthetic(lat, lon, i, rng) if args.synthetic else fetch(lat, lon, mid, session)
-            if d:
+            if d and any(v in d and np.isfinite(d[v]).any() for v in ("wind_gusts_10m", "precipitation")):
                 data.append(((mid, label, color), d)); seen_models.add(label)
         if not data:
             log.warning("%s: no ensemble data", name); continue
-        rows = plot_city(cid, name, lat, lon, data, now, OUT / f"{cid}.png")
+        try:
+            rows = plot_city(cid, name, lat, lon, data, now, OUT / f"{cid}.png")
+        except Exception as e:  # noqa: BLE001
+            plt.close("all"); log.error("%s: plot failed: %s", name, str(e)[:160]); continue
         best = max(rows, key=lambda r: r[1]) if rows else None
         result["cities"].append({"id": cid, "name": name, "lat": lat, "lon": lon, "image": f"images/plumes/{cid}.png",
                                  "peak_kt": round(best[1]) if best else None, "peak_model": best[0] if best else None,
