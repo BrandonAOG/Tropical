@@ -102,7 +102,8 @@
   .readout .valid { font-size: 13px; color: var(--muted); line-height: 1.25; }
   .readout .valid b { display: block; color: var(--ink); font-weight: 600; font-size: 14px; }
 
-  .ticks { display: flex; gap: 3px; align-items: flex-end; height: 34px; }
+  .ticks { display: flex; gap: 3px; align-items: flex-end; height: 34px; touch-action: none; cursor: ew-resize; user-select: none; -webkit-user-select: none; }
+  .ticks.scrubbing button.active::before { background: var(--amber); }
   .ticks button {
     flex: 1; height: 100%; position: relative; border-radius: 3px; min-width: 0;
   }
@@ -144,7 +145,7 @@
     .mobile-selects { display: flex; }
     section.viewer { padding: 12px; }
     .transport { grid-template-columns: 1fr 1fr; grid-template-rows: auto auto; gap: 12px; }
-    .ticks { grid-column: 1 / -1; }
+    .ticks { grid-column: 1 / -1; height: 44px; padding-top: 6px; }
     .readout { min-width: 0; }
     .readout .hour { font-size: 36px; }
     .controls { justify-content: flex-end; }
@@ -407,8 +408,7 @@
     hours().forEach((h, i) => {
       const b = document.createElement("button"); b.dataset.h = pad(h); b.setAttribute("role", "tab");
       b.title = `Hour ${pad(h)}`; b.setAttribute("aria-label", `Forecast hour ${pad(h)}`);
-      b.onclick = () => { stop(); setHour(i); };
-      b.onmouseenter = () => { if (!S.playing) setHour(i, true); };
+      b.onmouseenter = (e) => { if (!S.playing && !$("ticks").classList.contains("scrubbing")) setHour(i, true); };
       t.appendChild(b);
     });
   }
@@ -487,6 +487,33 @@
   $("first").onclick = () => { stop(); setHour(0); };
   $("last").onclick = () => { stop(); setHour(hours().length - 1); };
   $("ticks").onmouseleave = () => { if (!S.playing) setHour(S.hourIdx); };
+
+  // Scrub: drag a finger (or the mouse) across the tick strip to move through frames.
+  (() => {
+    const strip = $("ticks");
+    let scrubbing = false;
+    const idxAt = (x) => {
+      const r = strip.getBoundingClientRect();
+      const n = hours().length;
+      return Math.max(0, Math.min(n - 1, Math.floor(((x - r.left) / r.width) * n)));
+    };
+    strip.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      scrubbing = true; stop(); strip.classList.add("scrubbing");
+      strip.setPointerCapture(e.pointerId);
+      setHour(idxAt(e.clientX)); e.preventDefault();
+    });
+    strip.addEventListener("pointermove", (e) => {
+      if (!scrubbing) return;
+      const i = idxAt(e.clientX);
+      if (i !== S.hourIdx) setHour(i);
+      e.preventDefault();
+    });
+    const end = (e) => { if (!scrubbing) return; scrubbing = false; strip.classList.remove("scrubbing"); writeHash(); };
+    strip.addEventListener("pointerup", end); strip.addEventListener("pointercancel", end);
+    // pointerdown already handles the tap; stop the buttons' own click from double-firing
+    strip.addEventListener("click", (e) => e.preventDefault(), true);
+  })();
 
   document.addEventListener("keydown", (e) => {
     if (!S.run || e.target.tagName === "SELECT") return;

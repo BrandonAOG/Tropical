@@ -36,7 +36,7 @@
     flex: 0 0 auto; min-width: 210px; text-align: left; background: var(--panel); border: 1px solid var(--line);
     border-radius: var(--radius); padding: 10px 14px; border-top: 4px solid var(--td);
   }
-  .storm.hu { border-top-color: var(--hu); } .storm.ts { border-top-color: var(--ts); }
+  .storm.hu { border-top-color: var(--hu); } .storm.ts { border-top-color: var(--ts); } .storm.inv { border-top-color: #8a97a5; }
   .storm.active { outline: 2px solid var(--teal); outline-offset: -1px; }
   .storm .name { font-family: "Barlow Condensed", sans-serif; font-weight: 700; font-size: 22px; line-height: 1.1; }
   .storm .cls { color: var(--muted); font-size: 12.5px; }
@@ -58,6 +58,10 @@
   .chip { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--teal-soft); color: #0a5960; font-weight: 500; }
   .chip.ens { background: var(--amber-soft); color: var(--amber); }
 
+  .areas { margin-top: 22px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .area { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 12px; font-size: 13.5px; display: flex; gap: 12px; align-items: baseline; }
+  .area b { font-family: "Barlow Condensed", sans-serif; font-size: 20px; font-weight: 700; }
+  .area .lo { color: #b58f00; } .area .md { color: #e07b00; } .area .hi { color: var(--hu); }
   section.outlook { margin-top: 30px; }
   section.outlook h3 { font-size: 15px; font-weight: 600; margin: 0 0 8px; color: var(--muted); }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -153,6 +157,7 @@
   <div id="stormStrip" class="storms" role="tablist" aria-label="Active storms"></div>
   <div id="empty" class="empty" hidden></div>
   <div id="detail" class="detail" hidden></div>
+  <div id="areas" class="areas"></div>
 
   <section class="outlook">
     <h3>NHC tropical weather outlooks</h3>
@@ -178,7 +183,7 @@
   const BASE = (window.WX_ASSETS || "").replace(/\/?$/, "/").replace(/^\/$/, "");
   const MONS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   const fmt = (iso) => { const d = new Date(iso); return `${String(d.getUTCDate()).padStart(2,"0")} ${MONS[d.getUTCMonth()]} ${String(d.getUTCHours()).padStart(2,"0")}:${String(d.getUTCMinutes()).padStart(2,"0")}Z`; };
-  const cls = (s) => /hurricane/i.test(s.classification) ? "hu" : /storm/i.test(s.classification) ? "ts" : "td";
+  const cls = (s) => s.invest ? "inv" : /hurricane/i.test(s.classification) ? "hu" : /storm/i.test(s.classification) ? "ts" : "td";
   const cat = (kt) => kt >= 137 ? "Category 5" : kt >= 113 ? "Category 4" : kt >= 96 ? "Category 3" : kt >= 83 ? "Category 2" : kt >= 64 ? "Category 1" : kt >= 34 ? "Tropical storm" : "Depression";
   const mph = (kt) => Math.round(kt * 1.15078);
 
@@ -189,8 +194,9 @@
     for (const s of data.storms) {
       const b = document.createElement("button");
       b.className = `storm ${cls(s)}`; b.setAttribute("role", "tab");
-      b.innerHTML = `<div class="cls">${s.classification}</div><div class="name">${s.name}</div>
-        <div class="stats"><span><b>${s.intensity} kt</b> · ${mph(s.intensity)} mph</span>${s.pressure ? `<span><b>${s.pressure}</b> mb</span>` : ""}</div>`;
+      const stats = s.intensity ? `<span><b>${s.intensity} kt</b> · ${mph(s.intensity)} mph</span>${s.pressure ? `<span><b>${s.pressure}</b> mb</span>` : ""}`
+                                : `<span>${(s.models || []).length} models in guidance</span>`;
+      b.innerHTML = `<div class="cls">${s.invest ? "Invest — not yet a depression" : s.classification}</div><div class="name">${s.name}</div><div class="stats">${stats}</div>`;
       b.onclick = () => select(s.id);
       strip.appendChild(b);
     }
@@ -238,11 +244,26 @@
     $("updated").textContent = "Updated " + fmt(data.generated);
     if (!data.storms.length) {
       $("empty").hidden = false;
-      $("empty").innerHTML = "<strong>No active tropical cyclones</strong>Nothing is currently being tracked by NHC in the Atlantic or Pacific. Check the outlooks below for areas to watch.";
+      $("empty").innerHTML = "<strong>No active tropical cyclones or invests</strong>Nothing is currently being tracked by NHC in the Atlantic or Pacific. Check the outlooks below for areas to watch.";
+      renderAreas();
+      const ov = data.overviews?.al;
+      if (ov) $("detail").hidden = false, $("detail").innerHTML = `<div class="graphic"><img src="${BASE + ov}?v=${encodeURIComponent(data.generated)}" alt="Atlantic overview"></div>`;
       return;
     }
     renderStrip();
     select(location.hash.replace("#", ""));
+    renderAreas();
+  }
+
+  function renderAreas() {
+    const wrap = $("areas"); wrap.innerHTML = "";
+    for (const a of (data.areas || [])) {
+      const p7 = parseInt(a.prob7) || 0, lvl = p7 < 40 ? "lo" : p7 < 60 ? "md" : "hi";
+      const d = document.createElement("div"); d.className = "area";
+      d.innerHTML = `<span>Outlook area · ${a.basin === "al" ? "Atlantic" : "E. Pacific"} · ${Math.abs(a.lat)}°N ${Math.abs(a.lon)}°W</span>
+        <span>2-day <b class="${lvl}">${a.prob2 || "—"}</b></span><span>7-day <b class="${lvl}">${a.prob7 || "—"}</b></span>`;
+      wrap.appendChild(d);
+    }
   }
   boot();
 })();
