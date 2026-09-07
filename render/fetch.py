@@ -91,6 +91,11 @@ def _probe_url(run: dt.datetime, step: int, session=None) -> str | None:
         return icon_urls(run, step, {("msl", None)})[0]
     if src == "gefs":
         return GEFS_IDX.format(ymd=run.strftime("%Y%m%d"), hh=run.strftime("%H"), mem=MODEL["members"][-1], fhr=step)
+    if src in ("ecmwf_ens", "ecmwf_aifs_ens"):
+        return ECMWF_ENS_FILE.format(ymd=run.strftime("%Y%m%d"), hh=run.strftime("%H"), step=step, model=ecmwf_model_name())
+    if src == "aigefs":
+        return GEFS_IDX.replace("/gens/prod/gefs.", "/aigefs/prod/aigefs.").format(
+            ymd=run.strftime("%Y%m%d"), hh=run.strftime("%H"), mem=MODEL["members"][-1], fhr=step)
     return None
 
 
@@ -292,6 +297,100 @@ def download_grouped(run: dt.datetime, fhr: int, pairs: set, bbox, dest: Path,
     return dest
 
 
+# ------------------------------------------------------------- ECMWF ENS ----
+ECMWF_ENS_FILE = "https://data.ecmwf.int/forecasts/{ymd}/{hh}z/{model}/0p25/enfo/{ymd}{hh}0000-{step}h-enfo-ef.grib2"
+
+
+def ecmwf_model_name() -> str:
+    return "aifs-ens" if MODEL["source"] == "ecmwf_aifs_ens" else "ifs"
+
+
+def download_ecmwf_ens(run: dt.datetime, step: int, fields, dest: Path, retries: int = 4) -> Path:
+    """All 51 members (control + perturbed) of the listed fields for one step,
+    byte-ranged out of the enfo file via the .index."""
+    from ecmwf.opendata import Client
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists() and dest.stat().st_size > 1000:
+        return dest
+    client = Client(source="ecmwf", model=ecmwf_model_name(), resol="0p25")
+    pl, sfc = {}, set()
+    for name, lev in fields:
+        (pl.setdefault(lev, set()).add(name) if lev is not None else sfc.add(name))
+    if step == 0:
+        sfc.discard("tp")
+    reqs = [{"stream": "enfo", "type": ["cf", "pf"], "step": step, "levtype": "pl", "levelist": lev, "param": sorted(n)} for lev, n in pl.items()]
+    if sfc:
+        reqs.append({"stream": "enfo", "type": ["cf", "pf"], "step": step, "levtype": "sfc", "param": sorted(sfc)})
+    tmp = dest.with_suffix(".part")
+    for attempt in range(retries):
+        try:
+            with open(tmp, "wb") as out:
+                for req in reqs:
+                    part = dest.with_suffix(f".{req.get('levelist', 'sfc')}.grib2")
+                    client.retrieve(date=run.strftime("%Y%m%d"), time=run.hour, target=str(part), **req)
+                    out.write(part.read_bytes()); part.unlink()
+            tmp.rename(dest)
+            return dest
+        except Exception as e:  # noqa: BLE001
+            log.warning("ECMWF ENS step %d attempt %d failed: %s", step, attempt + 1, str(e)[:120])
+            time.sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
+    raise RuntimeError(f"Failed to download ECMWF ENS step {step}")
+
+
+def load_grib_members(path: Path, tag: str = "") -> dict:
+    """Like load_grib, but splits messages by ensemble member:
+    {"c00": Fields, "p01": Fields, ...}. Control = perturbationNumber 0."""
+    import eccodes as ec
+    out: dict = {}
+    coords = {}
+    with open(path, "rb") as fh:
+        while True:
+            h = ec.codes_grib_new_from_file(fh)
+            if h is None:
+                break
+            try:
+                try:
+                    num = int(ec.codes_get(h, "perturbationNumber"))
+                except Exception:  # noqa: BLE001
+                    num = 0
+                mem = "c00" if num == 0 else f"p{num:02d}"
+                name = ec.codes_get(h, "shortName")
+                if name in ("unknown", "~", ""):
+                    name = f"p{ec.codes_get(h, 'paramId')}"
+                tol = ec.codes_get(h, "typeOfLevel"); lev = ec.codes_get(h, "level")
+                if tol == "isobaricInhPa":
+                    key = f"{name}{int(lev)}"
+                elif tol in ("heightAboveGround", "heightAboveGroundLayer"):
+                    key = HEIGHT_NAMES.get(name, name)
+                else:
+                    key = name
+                if ec.codes_get(h, "stepType") == "accum":
+                    start = int(ec.codes_get(h, "startStep")); endstep = int(ec.codes_get(h, "endStep"))
+                    key += "_acc" if start == 0 else f"_{endstep - start}"
+                key += tag
+                ni, nj = ec.codes_get(h, "Ni"), ec.codes_get(h, "Nj")
+                vals = ec.codes_get_values(h).reshape(nj, ni)
+                if not coords:
+                    lats = ec.codes_get_array(h, "latitudes").reshape(nj, ni); lons = ec.codes_get_array(h, "longitudes").reshape(nj, ni)
+                    coords = {"lat": lats[:, 0].copy(), "lon": lons[0, :].copy()}
+                f = out.setdefault(mem, Fields())
+                if key not in f:
+                    f[key] = np.asarray(vals, dtype=float)
+            finally:
+                ec.codes_release(h)
+    if not out:
+        raise RuntimeError(f"No data in {path}")
+    lon = np.where(coords["lon"] > 180, coords["lon"] - 360, coords["lon"]); order = np.argsort(lon); lon = lon[order]
+    lat = coords["lat"]; flip = lat[0] < lat[-1]
+    for f in out.values():
+        for k in list(f):
+            f[k] = f[k][:, order]
+            if flip:
+                f[k] = f[k][::-1, :]
+        f.lon, f.lat = lon, (lat[::-1] if flip else lat)
+    return out
+
+
 # ------------------------------------------------------------- GEFS ---------
 GEFS_FILTER = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gefs_atmos_0p50a.pl"
 GEFS_DIR = "/gefs.{ymd}/{hh}/atmos/pgrb2ap5"
@@ -301,7 +400,10 @@ GEFS_IDX = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/gens/prod/gefs.{ymd}/
 
 def gefs_member_url(run: dt.datetime, fhr: int, member: str, pairs, bbox) -> str:
     lon0, lon1, lat0, lat1 = bbox
-    q = {"dir": GEFS_DIR.format(ymd=run.strftime("%Y%m%d"), hh=run.strftime("%H")),
+    d = GEFS_DIR.format(ymd=run.strftime("%Y%m%d"), hh=run.strftime("%H"))
+    if MODEL["source"] == "aigefs":
+        d = d.replace("/gefs.", "/aigefs.")
+    q = {"dir": d,
          "file": GEFS_FILE.format(mem=member, hh=run.strftime("%H"), fhr=fhr),
          "subregion": "", "leftlon": f"{lon0 % 360:g}", "rightlon": f"{lon1 % 360:g}",
          "toplat": f"{lat1:g}", "bottomlat": f"{lat0:g}"}

@@ -114,26 +114,31 @@ def ens_precip6(stack, meta):
 
 
 def ens_lows(stack, meta):
-    """Every member's surface low centres, coloured by member, sized by depth.
-    The tropical-cyclone favourite: where does each member put the storm?"""
+    """Every member's surface low centres, labelled with the member number and
+    coloured by central pressure. Where does each member put the storm?"""
     fig, ax = new_map(meta)
     lon, lat = stack.lon, stack.lat
     LON, LAT = np.meshgrid(lon, lat)
     mean = _s(np.nanmean(stack["prmsl"], axis=0) / 100)
-    ax.contour(lon, lat, mean, levels=np.arange(940, 1060, 4), colors="#777", linewidths=0.6, transform=PC, zorder=3)
+    ax.contour(lon, lat, mean, levels=np.arange(940, 1060, 4), colors="#555", linewidths=0.8, transform=PC, zorder=3)
+    bounds = [940, 960, 970, 980, 990, 996, 1000, 1004, 1008, 1012]
+    cmap = mcolors.ListedColormap(["#5e0a5e", "#9b0c3d", "#d0021b", "#f05a28", "#f5a623", "#7ed321", "#1f8f3a", "#2b8cbe", "#7fb3d5"])
+    norm = mcolors.BoundaryNorm(bounds, cmap.N)
     size = max(9, len(lon) // 40)
     for i, m in enumerate(stack.members):
         p = _s(stack["prmsl"][i] / 100, 1.0)
         mn = minimum_filter(p, size)
-        ys, xs = np.where((p == mn) & (p < 1008))
+        ys, xs = np.where((p == mn) & (p < 1012))
+        label = m.replace("p", "").replace("c", "")          # c00 -> 00, p07 -> 07
         for y, x in zip(ys, xs):
             if 2 < y < len(lat) - 3 and 2 < x < len(lon) - 3:
-                ax.plot(LON[y, x], LAT[y, x], "o", ms=4 + max(0, (1000 - p[y, x])) * 0.25,
-                        color=MEMBER_COLORS(i % 20), mec="white", mew=0.4, alpha=0.85, transform=PC, zorder=6)
+                ax.text(LON[y, x], LAT[y, x], label, fontsize=8.5, fontweight="bold", ha="center", va="center",
+                        color=cmap(norm(p[y, x])), transform=PC, zorder=7,
+                        path_effects=[pe.withStroke(linewidth=2.2, foreground="white")])
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm); sm.set_array([])
     add_basemap(ax)
-    fig.text(0.5, 0.045, "Each dot is one member's low centre (MSLP < 1008 mb); bigger = deeper. Grey contours = ensemble-mean MSLP.",
-             ha="center", fontsize=9, color="#444")
-    title(fig, ax, meta, subtitle(meta, "Member surface low centres"))
+    colorbar(fig, sm, "Low centre pressure (mb) · number = member, 00 = control", ticks=bounds)
+    title(fig, ax, meta, subtitle(meta, "Member surface low centres & ensemble-mean MSLP (mb)"))
     return fig
 
 

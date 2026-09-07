@@ -64,7 +64,27 @@ MODELS["gefs"] = {
     "params": None, "credit": "NOAA/NCEP GEFS via NOMADS",
 }
 
+MODELS["ecens"] = {
+    "id": "ecens", "name": "ECMWF ENS", "resolution": "0.25°", "source": "ecmwf_ens", "kind": "ensemble",
+    "cycles": [0, 6, 12, 18], "min_age_hours": 8.5,
+    "hours": list(range(0, 241, 6)),
+    "probe_max_hours": [240, 144],           # 06/18Z ENS runs are published to 144 h
+    "members": ["c00"] + [f"p{i:02d}" for i in range(1, 51)],
+    "domain": (-150, -10, 0, 66),
+    "params": None, "credit": "ECMWF open data ENS (CC-BY-4.0)",
+    "ens_fields": [("msl", None), ("gh", 500), ("t", 850), ("2t", None), ("10u", None), ("10v", None), ("tp", None)],
+}
+
+MODELS["aifsens"] = dict(MODELS["ecens"], id="aifsens", name="ECMWF AIFS ENS", source="ecmwf_aifs_ens",
+                         min_age_hours=8.0, cycles=[0, 6, 12, 18], probe_max_hours=[240],
+                         hours=list(range(0, 241, 6)), credit="ECMWF open data AIFS-ENS (CC-BY-4.0)")
+MODELS["aigefs"] = dict(MODELS["gefs"], id="aigefs", name="AI-GEFS", source="aigefs", credit="NOAA/NCEP AIGEFS via NOMADS",
+                        min_age_hours=4.0, hours=list(range(0, 241, 6)))
+
 MODEL = MODELS[os.environ.get("WX_MODEL", "gfs").lower()]
+# Several models can share one Pages site (e.g. two ensembles in one repo): give
+# each its own manifest file name via WX_MANIFEST.
+MANIFEST_NAME = os.environ.get("WX_MANIFEST", "manifest.json")
 FORECAST_HOURS = MODEL["hours"]
 
 

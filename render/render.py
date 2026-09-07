@@ -37,12 +37,12 @@ import requests  # noqa: E402
 
 import plots  # noqa: E402
 import storage  # noqa: E402
-from config import (FORECAST_HOURS, KEEP_RUNS, MODEL, REGIONS, model_params, param_hours, products)  # noqa: E402
+from config import (FORECAST_HOURS, KEEP_RUNS, MANIFEST_NAME, MODEL, REGIONS, model_params, param_hours, products)  # noqa: E402
 PARAMS = products()  # deterministic or ensemble product table for this model
 ENSEMBLE = MODEL.get("kind") == "ensemble"
 if ENSEMBLE:
     import ensemble  # noqa: E402
-from fetch import (all_fetch_pairs, build_filter_url, crop, download, download_ecmwf, download_files, download_grouped, ecmwf_pairs, gefs_member_url,
+from fetch import (all_fetch_pairs, build_filter_url, crop, download, download_ecmwf, download_ecmwf_ens, download_files, download_grouped, ecmwf_pairs, gefs_member_url, load_grib_members,
                    latest_available_run, load_grib, merge, normalise, prev_steps, step_for,
                    synthetic_fields)  # noqa: E402
 
@@ -133,6 +133,19 @@ def render_ensemble_frame(run, fhr, region, param_ids, grib_paths, out_dir, synt
             for k in ("prmsl", "gh500", "t850", "t2m", "u10", "v10", "tp_6"):
                 f[k] = f[k] * (1 + 0.004 * rng.normal() * (1 + fhr / 48)) + (rng.normal() * (150 if k == "prmsl" else 0.4) * (1 + fhr / 48))
             members.append(m); fields.append(f)
+    elif MODEL["source"] in ("ecmwf_ens", "ecmwf_aifs_ens"):
+        # one global file holds every member; optional previous-step file for precip de-accumulation
+        try:
+            per_member = load_grib_members(Path(grib_paths[""]))
+            if grib_paths.get("_m6"):
+                for m, pf in load_grib_members(Path(grib_paths["_m6"]), "_m6").items():
+                    if m in per_member:
+                        per_member[m].update(pf)
+        except Exception as e:  # noqa: BLE001
+            log.error("f%03d: ENS file unreadable: %s", fhr, e); return []
+        for m in MODEL["members"]:
+            if m in per_member:
+                members.append(m); fields.append(normalise(crop(per_member[m], padded(bbox)), fhr))
     else:
         for m, path in (grib_paths or {}).items():
             try:
@@ -167,10 +180,10 @@ def render_ensemble_frame(run, fhr, region, param_ids, grib_paths, out_dir, synt
 
 
 def write_manifest(run_id: str, hours: list[int], regions: list[str], param_ids: list[str]):
-    man_path = SITE / "manifest.json"
+    man_path = SITE / MANIFEST_NAME
     manifest = None
     if storage.enabled():
-        manifest = storage.get_json("manifest.json")   # merge with what's already published
+        manifest = storage.get_json(MANIFEST_NAME)   # merge with what's already published
     if manifest is None and man_path.exists():
         try:
             manifest = json.loads(man_path.read_text())
@@ -247,13 +260,13 @@ def main():
         hours = [h for h in hours if h in have] or hours
         manifest = write_manifest(run_id, hours, args.regions, args.params)
         if storage.enabled():
-            storage.put_json(manifest, "manifest.json")
+            storage.put_json(manifest, MANIFEST_NAME)
         prune_runs([r["id"] for r in manifest["model"]["runs"]])
-        log.info("manifest written: %d hours", len(hours))
+        log.info("%s written: %d hours", MANIFEST_NAME, len(hours))
         return
 
     grib_dir = Path(tempfile.mkdtemp(prefix="wx_grib_")) if not args.keep_grib else ROOT / "grib" / run_id
-    pairs = all_fetch_pairs(args.params) if (MODEL["source"] == "nomads" or ENSEMBLE) else set()
+    pairs = all_fetch_pairs(args.params) if (MODEL["source"] == "nomads" or MODEL["source"] == "gefs") else set()
 
     # 1. download (sequential; both servers rate-limit aggressive parallel clients)
     #    GFS: one regional subset per (hour, region) plus small previous-step subsets.
@@ -265,6 +278,19 @@ def main():
         if args.synthetic:
             for region in args.regions:
                 grib_paths[(fhr, region)] = None
+            continue
+        if ENSEMBLE and MODEL["source"] in ("ecmwf_ens", "ecmwf_aifs_ens"):
+            files = {}
+            try:
+                files[""] = str(download_ecmwf_ens(run, fhr, MODEL["ens_fields"], grib_dir / f"ens_f{fhr:03d}.grib2"))
+                if fhr >= 6:
+                    files["_m6"] = str(download_ecmwf_ens(run, fhr - 6, [("tp", None)], grib_dir / f"ens_f{fhr-6:03d}_tp.grib2"))
+            except Exception as e:  # noqa: BLE001
+                log.error("f%03d: %s", fhr, e)
+                if "" not in files:
+                    continue
+            for region in args.regions:
+                grib_paths[(fhr, region)] = files
             continue
         if ENSEMBLE:
             bbox = MODEL["domain"]
@@ -380,11 +406,11 @@ def main():
         storage.upload_dir(out_dir, f"images/{MODEL['id']}/{run_id}")
     manifest = write_manifest(run_id, hours, args.regions, args.params)
     if storage.enabled():
-        storage.put_json(manifest, "manifest.json")
+        storage.put_json(manifest, MANIFEST_NAME)
     prune_runs([r["id"] for r in manifest["model"]["runs"]])
     if storage.enabled():
         shutil.rmtree(out_dir, ignore_errors=True)   # don't ship images in the Pages artifact too
-        (SITE / "manifest.json").unlink(missing_ok=True)
+        (SITE / MANIFEST_NAME).unlink(missing_ok=True)
     if not args.keep_grib:
         shutil.rmtree(grib_dir, ignore_errors=True)
 

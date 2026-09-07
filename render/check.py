@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import requests  # noqa: E402
 
-from config import FORECAST_HOURS, MODEL  # noqa: E402
+from config import FORECAST_HOURS, MANIFEST_NAME, MODEL  # noqa: E402
 from fetch import latest_available_run, run_max_hour  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -72,7 +72,7 @@ def main():
     site = os.environ.get("SITE_URL")
     if site:
         try:
-            r = session.get(site.rstrip("/") + "/manifest.json", timeout=30, headers={"Cache-Control": "no-cache"})
+            r = session.get(site.rstrip("/") + "/" + MANIFEST_NAME, timeout=30, headers={"Cache-Control": "no-cache"})
             if r.ok:
                 runs = r.json().get("model", {}).get("runs", [])
                 published = runs[0]["id"] if runs else None

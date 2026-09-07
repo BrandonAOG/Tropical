@@ -558,7 +558,7 @@
   async function boot() {
     await Promise.all(SOURCES.map(async (m) => {
       try {
-        const r = await fetch(baseOf(m) + "manifest.json", { cache: "no-store" });
+        const r = await fetch(baseOf(m) + (m.manifest || "manifest.json"), { cache: "no-store" });
         if (!r.ok) throw new Error(r.status);
         const man = await r.json();
         if (man.model?.runs?.length) S.manifests[m.id] = man;
