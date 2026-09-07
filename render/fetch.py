@@ -12,6 +12,8 @@ import logging
 import os
 import re
 import time
+
+os.environ.setdefault("TQDM_DISABLE", "1")          # no per-file progress bars from the ECMWF client
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -69,7 +71,24 @@ def latest_available_run(now: dt.datetime | None = None,
             if run_max_hour(cand, session) is not None:
                 return cand
             log.info("%s %s not complete yet", MODEL["name"], cand.strftime("%Y%m%d %HZ"))
+        if MODEL["source"].startswith("ecmwf"):
+            ecmwf_explain(now, session)
         raise RuntimeError(f"No complete {MODEL['name']} run found in the last 48 h")
+
+
+def ecmwf_explain(now, session):
+    """When an ECMWF model can't be found, list what the open-data server
+    actually has for the most recent cycle so the layout can be corrected."""
+    cand = next(_candidate_cycles(now))
+    ymd, hh = cand.strftime("%Y%m%d"), cand.strftime("%H")
+    for url in [f"https://data.ecmwf.int/forecasts/{ymd}/{hh}z/",
+                f"https://data.ecmwf.int/forecasts/{ymd}/{hh}z/{ecmwf_model_name()}/",
+                f"https://data.ecmwf.int/forecasts/{ymd}/{hh}z/{ecmwf_model_name()}/0p25/",
+                f"https://data.ecmwf.int/forecasts/{ymd}/{hh}z/{ecmwf_model_name()}/0p25/enfo/"]:
+        entries = _listing(session, url, retries=1)
+        files = [e for e in entries if not e.endswith("/")]
+        log.info("ECMWF listing %s -> dirs %s, %d files%s", url, [e for e in entries if e.endswith("/")][:12], len(files),
+                 (" e.g. " + " ".join(files[:4])) if files else "")
     for cand in _candidate_cycles(now):
         url = NOMADS_IDX.format(ymd=cand.strftime("%Y%m%d"), hh=cand.strftime("%H"))
         try:
@@ -92,7 +111,9 @@ def _probe_url(run: dt.datetime, step: int, session=None) -> str | None:
     if src == "gefs":
         return GEFS_IDX.format(ymd=run.strftime("%Y%m%d"), hh=run.strftime("%H"), mem=MODEL["members"][-1], fhr=step)
     if src in ("ecmwf_ens", "ecmwf_aifs_ens"):
-        return ECMWF_ENS_FILE.format(ymd=run.strftime("%Y%m%d"), hh=run.strftime("%H"), step=step, model=ecmwf_model_name())
+        url = ECMWF_ENS_FILE.format(ymd=run.strftime("%Y%m%d"), hh=run.strftime("%H"), step=step, model=ecmwf_model_name())
+        # AIFS-ENS publishes control and perturbed members as separate files (-cf / -pf); IFS ENS combines them (-ef)
+        return url.replace("-enfo-ef.grib2", "-enfo-cf.grib2") if src == "ecmwf_aifs_ens" else url
     if src == "aigefs":
         return GEFS_IDX.replace("/gens/prod/gefs.", "/aigefs/prod/aigefs.").format(
             ymd=run.strftime("%Y%m%d"), hh=run.strftime("%H"), mem=MODEL["members"][-1], fhr=step)
@@ -117,7 +138,7 @@ def run_max_hour(run: dt.datetime, session: requests.Session | None = None) -> i
             r = session.get(url, timeout=30, allow_redirects=True, stream=True); r.close()
             if r.status_code == 200:
                 return last
-            log.info("probe %s -> HTTP %s", url.rsplit("/", 1)[-1], r.status_code)
+            log.info("probe %s -> HTTP %s", url, r.status_code)
         except requests.RequestException as e:
             log.warning("probe %s failed: %s", url, e)
     return None
@@ -305,9 +326,96 @@ def ecmwf_model_name() -> str:
     return "aifs-ens" if MODEL["source"] == "ecmwf_aifs_ens" else "ifs"
 
 
+def _index_select(index_url: str, session, want, retries: int = 3):
+    """Parse an ECMWF open-data .index (JSON lines) and return (offset, length)
+    for entries matching any of `want` = [(param, levelist or None)]. Logs the
+    parameters present when a wanted one is missing."""
+    import json as _json
+    text = None
+    for attempt in range(retries):
+        try:
+            r = session.get(index_url, timeout=120)
+            if r.status_code == 200:
+                text = r.text; break
+            log.info("index %s -> HTTP %s", index_url.rsplit("/", 1)[-1], r.status_code)
+        except requests.RequestException as e:
+            log.info("index fetch failed: %s", str(e)[:80])
+        time.sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
+    if text is None:
+        raise RuntimeError(f"index unavailable: {index_url}")
+    entries = [_json.loads(line) for line in text.splitlines() if line.strip()]
+    # some models publish equivalents under other names: geopotential z (m²/s²) for height gh,
+    # total column water tcw for tcwv. normalise() converts them after loading.
+    ALT = {"gh": ["gh", "z"], "tcwv": ["tcwv", "tcw"], "msl": ["msl", "prmsl"]}
+    found, ranges = set(), []
+    for wp, wl in want:
+        for cand in ALT.get(wp, [wp]):
+            hits = [e for e in entries if e.get("param") == cand and (wl is None or str(e.get("levelist")) == str(wl))]
+            if hits:
+                ranges += [(int(e["_offset"]), int(e["_length"])) for e in hits]; found.add((wp, wl)); break
+    missing = [w for w in want if w not in found]
+    if missing:
+        present = sorted({f"{e.get('param')}@{e.get('levelist', e.get('levtype'))}" for e in entries})
+        log.warning("index %s lacks %s; has: %s", index_url.rsplit("/", 1)[-1], missing, " ".join(present))
+    return ranges
+
+
+def _range_download(url: str, ranges, out, session, retries: int = 4):
+    """Fetch byte ranges from url and append to file object `out`. Ranges are
+    merged into contiguous blocks to keep the request count low."""
+    ranges = sorted(ranges)
+    blocks = []
+    for off, ln in ranges:
+        if blocks and off <= blocks[-1][1]:
+            blocks[-1][1] = max(blocks[-1][1], off + ln)
+        else:
+            blocks.append([off, off + ln])
+    for a, b in blocks:
+        for attempt in range(retries):
+            try:
+                r = session.get(url, headers={"Range": f"bytes={a}-{b - 1}"}, timeout=300)
+                if r.status_code in (200, 206):
+                    out.write(r.content); break
+                log.info("range %s -> HTTP %s", url.rsplit("/", 1)[-1], r.status_code)
+            except requests.RequestException as e:
+                log.info("range fetch failed: %s", str(e)[:80])
+            time.sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
+        else:
+            raise RuntimeError(f"range download failed: {url}")
+
+
+def download_ecmwf_ens_direct(run: dt.datetime, step: int, fields, dest: Path, session: requests.Session | None = None) -> Path:
+    """AIFS-ENS layout: separate -enfo-cf (control) and -enfo-pf (perturbed)
+    files per step. Select fields via the .index files and range-download."""
+    session = session or requests.Session()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists() and dest.stat().st_size > 1000:
+        return dest
+    base = ECMWF_ENS_FILE.format(ymd=run.strftime("%Y%m%d"), hh=run.strftime("%H"), step=step, model=ecmwf_model_name())
+    want = [(p, lev) for p, lev in fields if not (p == "tp" and step == 0)]
+    tmp = dest.with_suffix(".part")
+    total = 0
+    with open(tmp, "wb") as out:
+        for kind in ("cf", "pf"):
+            grib = base.replace("-enfo-ef.grib2", f"-enfo-{kind}.grib2")
+            ranges = _index_select(grib[:-6] + ".index", session, want)
+            if not ranges:
+                continue
+            _range_download(grib, ranges, out, session)
+            total += len(ranges)
+    if total == 0:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"no matching fields in AIFS-ENS index for step {step}")
+    tmp.rename(dest)
+    log.info("AIFS-ENS step %d: %d fields via range requests", step, total)
+    return dest
+
+
 def download_ecmwf_ens(run: dt.datetime, step: int, fields, dest: Path, retries: int = 4) -> Path:
     """All 51 members (control + perturbed) of the listed fields for one step,
     byte-ranged out of the enfo file via the .index."""
+    if MODEL["source"] == "ecmwf_aifs_ens":
+        return download_ecmwf_ens_direct(run, step, fields, dest)
     from ecmwf.opendata import Client
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() and dest.stat().st_size > 1000:
@@ -337,12 +445,15 @@ def download_ecmwf_ens(run: dt.datetime, step: int, fields, dest: Path, retries:
     raise RuntimeError(f"Failed to download ECMWF ENS step {step}")
 
 
-def load_grib_members(path: Path, tag: str = "") -> dict:
+def load_grib_members(path: Path, tag: str = "", bbox=None) -> dict:
     """Like load_grib, but splits messages by ensemble member:
-    {"c00": Fields, "p01": Fields, ...}. Control = perturbationNumber 0."""
+    {"c00": Fields, "p01": Fields, ...}. Control = perturbationNumber 0.
+    With bbox, every field is cropped as it's read (global 51-member files
+    would otherwise need ~3 GB of memory) and stored as float32."""
     import eccodes as ec
     out: dict = {}
     coords = {}
+    sel = None
     with open(path, "rb") as fh:
         while True:
             h = ec.codes_grib_new_from_file(fh)
@@ -372,15 +483,26 @@ def load_grib_members(path: Path, tag: str = "") -> dict:
                 vals = ec.codes_get_values(h).reshape(nj, ni)
                 if not coords:
                     lats = ec.codes_get_array(h, "latitudes").reshape(nj, ni); lons = ec.codes_get_array(h, "longitudes").reshape(nj, ni)
-                    coords = {"lat": lats[:, 0].copy(), "lon": lons[0, :].copy()}
+                    lat0, lon0 = lats[:, 0].copy(), lons[0, :].copy()
+                    lon180 = np.where(lon0 > 180, lon0 - 360, lon0)
+                    if bbox is not None:
+                        blon0, blon1, blat0, blat1 = bbox
+                        li = np.where((lon180 >= blon0) & (lon180 <= blon1))[0]
+                        la = np.where((lat0 >= blat0) & (lat0 <= blat1))[0]
+                        sel = (la, li)
+                        coords = {"lat": lat0[la], "lon": lon180[li]}
+                    else:
+                        coords = {"lat": lat0, "lon": lon180}
+                if sel is not None:
+                    vals = vals[np.ix_(*sel)]
                 f = out.setdefault(mem, Fields())
                 if key not in f:
-                    f[key] = np.asarray(vals, dtype=float)
+                    f[key] = np.asarray(vals, dtype=np.float32)
             finally:
                 ec.codes_release(h)
     if not out:
         raise RuntimeError(f"No data in {path}")
-    lon = np.where(coords["lon"] > 180, coords["lon"] - 360, coords["lon"]); order = np.argsort(lon); lon = lon[order]
+    lon = coords["lon"]; order = np.argsort(lon); lon = lon[order]
     lat = coords["lat"]; flip = lat[0] < lat[-1]
     for f in out.values():
         for k in list(f):
@@ -637,6 +759,22 @@ def download_files(run: dt.datetime, step: int, pairs: set, dest: Path, session:
     return dest
 
 
+def pack_members(path: Path, prev_path, bbox, dest: Path) -> Path:
+    """Read a multi-member GRIB (plus optional previous-step file) once, cropped
+    to bbox, and save a compact .npz that workers can load cheaply."""
+    per = load_grib_members(path, bbox=bbox)
+    if prev_path:
+        for m, pf in load_grib_members(Path(prev_path), "_m6", bbox=bbox).items():
+            if m in per:
+                per[m].update(pf)
+    members = sorted(per)
+    keys = sorted(set.intersection(*(set(per[m]) for m in members)))
+    arrays = {k: np.stack([per[m][k] for m in members]).astype(np.float32) for k in keys}
+    any_f = per[members[0]]
+    np.savez(dest, lon=any_f.lon, lat=any_f.lat, members=np.array(members), keys=np.array(keys), **arrays)
+    return dest
+
+
 class Fields(dict):
     """A dict of name -> 2D numpy array, plus shared lon/lat 1-D coordinates."""
     lon: np.ndarray
@@ -732,7 +870,7 @@ def normalise(f: "Fields", fhr: int = 0) -> "Fields":
     src = MODEL["source"]
     accum_from_zero = src in ("ecmwf_opendata", "cmc", "icon")
     # ---- name aliases (any tag suffix)
-    alias = {"msl": "prmsl", "tcwv": "pwat", "tciwv": "pwat", "sde": "snod", "z": "gh",
+    alias = {"msl": "prmsl", "tcwv": "pwat", "tciwv": "pwat", "tcw": "pwat", "sde": "snod", "z": "gh",
              # DWD local names that eccodes passes through verbatim
              "TQV": "pwat", "T_G": "t_sfc", "CAPE_ML": "cape", "H_SNOW": "snod", "FR_LAND": "lsm", "PMSL": "prmsl",
              "TOT_PREC": "tp", "T_2M": "t2m", "U_10M": "u10", "V_10M": "v10", "RELHUM": "r", "FI": "z"}

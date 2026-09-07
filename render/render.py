@@ -42,7 +42,8 @@ PARAMS = products()  # deterministic or ensemble product table for this model
 ENSEMBLE = MODEL.get("kind") == "ensemble"
 if ENSEMBLE:
     import ensemble  # noqa: E402
-from fetch import (all_fetch_pairs, build_filter_url, crop, download, download_ecmwf, download_ecmwf_ens, download_files, download_grouped, ecmwf_pairs, gefs_member_url, load_grib_members,
+from fetch import Fields  # noqa: E402
+from fetch import (all_fetch_pairs, build_filter_url, crop, download, download_ecmwf, download_ecmwf_ens, download_files, download_grouped, ecmwf_pairs, gefs_member_url, load_grib_members, pack_members,
                    latest_available_run, load_grib, merge, normalise, prev_steps, step_for,
                    synthetic_fields)  # noqa: E402
 
@@ -134,18 +135,17 @@ def render_ensemble_frame(run, fhr, region, param_ids, grib_paths, out_dir, synt
                 f[k] = f[k] * (1 + 0.004 * rng.normal() * (1 + fhr / 48)) + (rng.normal() * (150 if k == "prmsl" else 0.4) * (1 + fhr / 48))
             members.append(m); fields.append(f)
     elif MODEL["source"] in ("ecmwf_ens", "ecmwf_aifs_ens"):
-        # one global file holds every member; optional previous-step file for precip de-accumulation
+        # packed .npz prepared once per hour in the main process (see pack_members)
         try:
-            per_member = load_grib_members(Path(grib_paths[""]))
-            if grib_paths.get("_m6"):
-                for m, pf in load_grib_members(Path(grib_paths["_m6"]), "_m6").items():
-                    if m in per_member:
-                        per_member[m].update(pf)
+            z = np.load(grib_paths["npz"], allow_pickle=False)
+            lon, lat = z["lon"], z["lat"]; mems = list(z["members"]); keys = list(z["keys"])
+            for i, m in enumerate(mems):
+                f = Fields(); f.lon, f.lat = lon, lat
+                for k in keys:
+                    f[k] = z[k][i]
+                members.append(m); fields.append(normalise(crop(f, padded(bbox)), fhr))
         except Exception as e:  # noqa: BLE001
-            log.error("f%03d: ENS file unreadable: %s", fhr, e); return []
-        for m in MODEL["members"]:
-            if m in per_member:
-                members.append(m); fields.append(normalise(crop(per_member[m], padded(bbox)), fhr))
+            log.error("f%03d: packed ENS data unreadable: %s", fhr, e); return []
     else:
         for m, path in (grib_paths or {}).items():
             try:
@@ -282,13 +282,15 @@ def main():
         if ENSEMBLE and MODEL["source"] in ("ecmwf_ens", "ecmwf_aifs_ens"):
             files = {}
             try:
-                files[""] = str(download_ecmwf_ens(run, fhr, MODEL["ens_fields"], grib_dir / f"ens_f{fhr:03d}.grib2"))
-                if fhr >= 6:
-                    files["_m6"] = str(download_ecmwf_ens(run, fhr - 6, [("tp", None)], grib_dir / f"ens_f{fhr-6:03d}_tp.grib2"))
+                main = download_ecmwf_ens(run, fhr, MODEL["ens_fields"], grib_dir / f"ens_f{fhr:03d}.grib2")
+                prev_f = download_ecmwf_ens(run, fhr - 6, [("tp", None)], grib_dir / f"ens_f{fhr-6:03d}_tp.grib2") if fhr >= 6 else None
+                npz = pack_members(main, prev_f, MODEL["domain"], grib_dir / f"ens_f{fhr:03d}.npz")
+                for pth in (main, prev_f):
+                    if pth:
+                        Path(pth).unlink(missing_ok=True)      # free disk: the .npz is all we need now
+                files["npz"] = str(npz)
             except Exception as e:  # noqa: BLE001
-                log.error("f%03d: %s", fhr, e)
-                if "" not in files:
-                    continue
+                log.error("f%03d: %s", fhr, e); continue
             for region in args.regions:
                 grib_paths[(fhr, region)] = files
             continue
