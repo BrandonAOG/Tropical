@@ -120,7 +120,6 @@ jobs:
           path: site/images
           merge-multiple: true
         continue-on-error: true
-        continue-on-error: true
       - name: Write manifest
         env:
           HOURS: ${{ github.event.inputs.hours }}
