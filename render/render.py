@@ -29,9 +29,10 @@ import matplotlib.pyplot as plt  # noqa: E402
 import requests  # noqa: E402
 
 import plots  # noqa: E402
+import storage  # noqa: E402
 from config import (FORECAST_HOURS, KEEP_RUNS, MODEL, PARAMS, REGIONS)  # noqa: E402
-from fetch import (all_fetch_pairs, build_filter_url, download, latest_available_run,
-                   load_grib, synthetic_fields)  # noqa: E402
+from fetch import (all_fetch_pairs, build_filter_url, crop, download, download_ecmwf,
+                   latest_available_run, load_grib, synthetic_fields)  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("render")
@@ -59,7 +60,7 @@ def render_frame(run_iso: str, fhr: int, region: str, param_ids: list[str],
     """Render every requested parameter for one (hour, region). Runs in a worker."""
     run = dt.datetime.fromisoformat(run_iso)
     bbox = REGIONS[region]["bbox"]
-    fields = synthetic_fields(fhr, padded(bbox)) if synthetic else load_grib(Path(grib_path))
+    fields = synthetic_fields(fhr, padded(bbox)) if synthetic else crop(load_grib(Path(grib_path)), padded(bbox))
     meta = {"run": run, "fhr": fhr, "bbox": bbox, "region": region,
             "region_name": REGIONS[region]["name"]}
     written = []
@@ -71,20 +72,35 @@ def render_frame(run_iso: str, fhr: int, region: str, param_ids: list[str],
             fig = fn(fields, meta)
             fig.savefig(dest, dpi=fig.dpi, facecolor="white")
             plt.close(fig)
+            compress_png(dest)
             written.append(str(dest))
         except Exception as e:  # noqa: BLE001
             log.exception("failed %s %s f%03d: %s", region, pid, fhr, e)
     return written
 
 
+def compress_png(path: Path):
+    """Palette-quantize the PNG: these maps have few distinct colours, so this
+    roughly halves the file with no visible change."""
+    try:
+        from PIL import Image
+        im = Image.open(path).convert("RGB").quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+        im.save(path, optimize=True)
+    except Exception as e:  # noqa: BLE001
+        log.warning("compress failed for %s: %s", path.name, e)
+
+
 def write_manifest(run_id: str, hours: list[int], regions: list[str], param_ids: list[str]):
     man_path = SITE / "manifest.json"
-    manifest = {"model": {}, "regions": {}, "params": {}}
-    if man_path.exists():
+    manifest = None
+    if storage.enabled():
+        manifest = storage.get_json("manifest.json")   # merge with what's already published
+    if manifest is None and man_path.exists():
         try:
             manifest = json.loads(man_path.read_text())
         except json.JSONDecodeError:
-            pass
+            manifest = None
+    manifest = manifest or {"model": {}, "regions": {}, "params": {}}
     runs = [r for r in manifest.get("model", {}).get("runs", []) if r["id"] != run_id]
     runs.append({
         "id": run_id,
@@ -92,8 +108,8 @@ def write_manifest(run_id: str, hours: list[int], regions: list[str], param_ids:
         "hours": hours, "regions": regions, "params": param_ids,
     })
     runs.sort(key=lambda r: r["id"], reverse=True)
-    manifest["model"] = {"id": MODEL["id"], "name": MODEL["name"],
-                         "resolution": MODEL["resolution"], "runs": runs[:KEEP_RUNS]}
+    manifest["model"] = {"id": MODEL["id"], "name": MODEL["name"], "resolution": MODEL["resolution"],
+                         "credit": MODEL.get("credit", ""), "runs": runs[:KEEP_RUNS]}
     manifest["regions"] = {k: {"name": v["name"]} for k, v in REGIONS.items()}
     manifest["params"] = {k: {"name": v["name"], "group": v["group"]} for k, v in PARAMS.items()}
     manifest["path"] = "images/{model}/{run}/{region}/{param}/f{hour}.png"
@@ -103,6 +119,11 @@ def write_manifest(run_id: str, hours: list[int], regions: list[str], param_ids:
 
 
 def prune_runs(keep_ids: list[str]):
+    if storage.enabled():
+        for rid in storage.list_prefixes(f"images/{MODEL['id']}"):
+            if rid not in keep_ids:
+                storage.delete_prefix(f"images/{MODEL['id']}/{rid}/")
+        return
     img_root = SITE / "images" / MODEL["id"]
     if not img_root.exists():
         return
@@ -117,7 +138,7 @@ def main():
     ap.add_argument("--run", help="YYYYMMDDHH; default = latest available on NOMADS")
     ap.add_argument("--hours", default=None, help="e.g. 0-120/6 or 0,6,12")
     ap.add_argument("--regions", nargs="*", default=list(REGIONS))
-    ap.add_argument("--params", nargs="*", default=list(PARAMS))
+    ap.add_argument("--params", nargs="*", default=MODEL["params"])
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--synthetic", action="store_true", help="fake data, no network")
     ap.add_argument("--keep-grib", action="store_true")
@@ -142,13 +163,25 @@ def main():
     grib_dir = Path(tempfile.mkdtemp(prefix="wx_grib_")) if not args.keep_grib else ROOT / "grib" / run_id
     pairs = all_fetch_pairs(args.params)
 
-    # 1. download (sequential; NOMADS rate-limits aggressive parallel clients)
+    # 1. download (sequential; both servers rate-limit aggressive parallel clients)
+    #    GFS: one regional subset per (hour, region). ECMWF: one global file per hour,
+    #    shared by every region (open data has no bbox subsetting).
     grib_paths: dict[tuple[int, str], str | None] = {}
     for fhr in hours:
-        for region in args.regions:
-            if args.synthetic:
+        if args.synthetic:
+            for region in args.regions:
                 grib_paths[(fhr, region)] = None
-                continue
+            continue
+        if MODEL["source"] == "ecmwf_opendata":
+            dest = grib_dir / f"global_f{fhr:03d}.grib2"
+            try:
+                download_ecmwf(run, fhr, args.params, dest)
+                for region in args.regions:
+                    grib_paths[(fhr, region)] = str(dest)
+            except RuntimeError as e:
+                log.error("%s", e)
+            continue
+        for region in args.regions:
             url = build_filter_url(run, fhr, pairs, padded(REGIONS[region]["bbox"]))
             dest = grib_dir / f"{region}_f{fhr:03d}.grb2"
             try:
@@ -169,9 +202,16 @@ def main():
                 log.info("%d images written", n_done)
     log.info("done: %d images", n_done)
 
-    # 3. manifest + prune
+    # 3. publish: R2 if configured, else leave in site/ for the Pages artifact
+    if storage.enabled():
+        storage.upload_dir(out_dir, f"images/{MODEL['id']}/{run_id}")
     manifest = write_manifest(run_id, hours, args.regions, args.params)
+    if storage.enabled():
+        storage.put_json(manifest, "manifest.json")
     prune_runs([r["id"] for r in manifest["model"]["runs"]])
+    if storage.enabled():
+        shutil.rmtree(out_dir, ignore_errors=True)   # don't ship images in the Pages artifact too
+        (SITE / "manifest.json").unlink(missing_ok=True)
     if not args.keep_grib:
         shutil.rmtree(grib_dir, ignore_errors=True)
 

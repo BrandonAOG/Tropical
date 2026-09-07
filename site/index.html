@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&display=swap" rel="stylesheet">
+<script src="config.js"></script>
 <style>
   :root {
     --paper: #f1f4f7;
@@ -44,6 +45,11 @@
   nav { display: flex; gap: 4px; margin-left: 8px; }
   nav a { text-decoration: none; color: var(--muted); padding: 6px 12px; border-radius: var(--radius); font-weight: 500; }
   nav a.active { background: var(--teal-soft); color: #0a5960; font-weight: 600; }
+  .models { display: flex; gap: 4px; margin-left: 18px; padding-left: 18px; border-left: 1px solid var(--line); }
+  .models button { padding: 6px 12px; border-radius: var(--radius); font-weight: 600; color: var(--muted); font-size: 15px; }
+  .models button.active { background: var(--ink); color: #fff; }
+  .models button small { font-weight: 500; font-size: 11.5px; margin-left: 5px; opacity: .75; }
+  .models button:disabled { opacity: .4; cursor: default; }
   .runs { margin-left: auto; display: flex; align-items: center; gap: 8px; }
   .runs label { color: var(--muted); font-size: 13px; }
   .chip {
@@ -142,7 +148,8 @@
     .controls { justify-content: flex-end; }
     .hint { display: none; }
     header { gap: 10px; padding: 10px 12px; flex-wrap: wrap; }
-    .brand small { display: none; }
+    .models { margin-left: 0; padding-left: 0; border: 0; }
+    .models button small { display: none; }
     .updated { display: none; }
   }
   @media (prefers-reduced-motion: no-preference) {
@@ -153,11 +160,12 @@
 <body>
 
 <header>
-  <div class="brand">WxModels <small id="modelName">GFS 0.25°</small></div>
+  <div class="brand">WxModels</div>
   <nav>
     <a href="index.html" class="active">Models</a>
     <a href="tropical.html">Tropical</a>
   </nav>
+  <div class="models" id="modelChips" role="tablist" aria-label="Model"></div>
   <div class="runs">
     <label for="runChips">Run</label>
     <div id="runChips" style="display:flex;gap:6px"></div>
@@ -208,6 +216,7 @@
       <span><kbd>space</kbd> play / pause</span>
       <span><kbd>↑</kbd> <kbd>↓</kbd> change parameter</span>
       <span><kbd>r</kbd> change region</span>
+      <span><kbd>m</kbd> change model</span>
       <span>Link to this view: the address bar updates as you browse.</span>
     </div>
   </section>
@@ -216,16 +225,22 @@
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
-  const S = { manifest: null, run: null, region: null, param: null, hourIdx: 0, playing: false, timer: null, cache: new Map() };
+  const BASE = (window.WX_ASSETS || "").replace(/\/?$/, "/").replace(/^\/$/, "");
+  // Models come from config.js: window.WX_MODELS = [{id, name, base}, ...]. Each has its own manifest.json.
+  const SOURCES = (window.WX_MODELS && window.WX_MODELS.length) ? window.WX_MODELS : [{ id: "gfs", name: "GFS", base: "" }];
+  const S = { model: null, manifests: {}, manifest: null, run: null, region: null, param: null, hourIdx: 0, playing: false, timer: null, cache: new Map() };
+  const baseOf = (m) => ((m.base || BASE || "")).replace(/\/?$/, "/").replace(/^\/$/, "");
 
   // ---------- URL state ----------
   function readHash() {
-    // #run/region/param/f024
-    const parts = location.hash.replace(/^#/, "").split("/").filter(Boolean);
-    return { run: parts[0], region: parts[1], param: parts[2], hour: parts[3] ? parseInt(parts[3].replace(/^f/, ""), 10) : null };
+    // #model/run/region/param/f024  (older links without the model segment still work)
+    let parts = location.hash.replace(/^#/, "").split("/").filter(Boolean);
+    let model = null;
+    if (parts.length && !/^\d{10}$/.test(parts[0])) model = parts.shift();
+    return { model, run: parts[0], region: parts[1], param: parts[2], hour: parts[3] ? parseInt(parts[3].replace(/^f/, ""), 10) : null };
   }
   function writeHash() {
-    const h = `#${S.run.id}/${S.region}/${S.param}/f${pad(currentHour())}`;
+    const h = `#${S.model.id}/${S.run.id}/${S.region}/${S.param}/f${pad(currentHour())}`;
     if (location.hash !== h) history.replaceState(null, "", h);
   }
   const pad = (n) => String(n).padStart(3, "0");
@@ -233,7 +248,7 @@
 
   // ---------- data ----------
   function imgUrl(hour) {
-    return S.manifest.path
+    return baseOf(S.model) + S.manifest.path
       .replace("{model}", S.manifest.model.id).replace("{run}", S.run.id)
       .replace("{region}", S.region).replace("{param}", S.param).replace("{hour}", pad(hour));
   }
@@ -276,6 +291,27 @@
     }
     rs.onchange = (e) => setRegion(e.target.value);
     ps.onchange = (e) => setParam(e.target.value);
+  }
+
+  function buildModelChips() {
+    const wrap = $("modelChips"); wrap.innerHTML = "";
+    for (const m of SOURCES) {
+      const man = S.manifests[m.id];
+      const b = document.createElement("button"); b.setAttribute("role", "tab");
+      b.innerHTML = `${m.name || man?.model?.name || m.id}<small>${man?.model?.resolution || ""}</small>`;
+      b.disabled = !man; b.title = man ? "" : "Not published yet";
+      b.onclick = () => setModel(m.id); wrap.appendChild(b);
+    }
+  }
+  function setModel(id) {
+    const m = SOURCES.find(x => x.id === id && S.manifests[x.id]) || SOURCES.find(x => S.manifests[x.id]);
+    S.model = m; S.manifest = S.manifests[m.id];
+    [...$("modelChips").children].forEach((b, i) => b.classList.toggle("active", SOURCES[i].id === m.id));
+    document.title = `WxModels — ${S.manifest.model.name} forecast maps`;
+    const keepRun = S.run && S.manifest.model.runs.find(r => r.id === S.run.id);
+    stop();
+    buildRunChips();
+    setRun(keepRun ? keepRun.id : S.manifest.model.runs[0].id);
   }
 
   function buildRunChips() {
@@ -381,28 +417,35 @@
       case "ArrowDown": e.preventDefault(); setParam(params[(params.indexOf(S.param) + 1) % params.length]); break;
       case "ArrowUp":   e.preventDefault(); setParam(params[(params.indexOf(S.param) - 1 + params.length) % params.length]); break;
       case "r": case "R": setRegion(regions[(regions.indexOf(S.region) + 1) % regions.length]); break;
+      case "m": case "M": { const av = SOURCES.filter(x => S.manifests[x.id]); setModel(av[(av.findIndex(x => x.id === S.model.id) + 1) % av.length].id); break; }
       default: return;
     }
   });
 
   // ---------- boot ----------
   async function boot() {
-    try {
-      const r = await fetch("manifest.json", { cache: "no-store" });
-      if (!r.ok) throw new Error(r.status);
-      S.manifest = await r.json();
-    } catch (e) {
-      showState("No maps yet", "<br>manifest.json wasn't found. Run <code>python render/render.py</code> or wait for the scheduled job to publish the first run.");
+    await Promise.all(SOURCES.map(async (m) => {
+      try {
+        const r = await fetch(baseOf(m) + "manifest.json", { cache: "no-store" });
+        if (!r.ok) throw new Error(r.status);
+        const man = await r.json();
+        if (man.model?.runs?.length) S.manifests[m.id] = man;
+      } catch (e) { console.warn("manifest unavailable for", m.id, e.message); }
+    }));
+    buildModelChips();
+    if (!Object.keys(S.manifests).length) {
+      showState("No maps yet", "<br>No model has published a run. Wait for the scheduled job, or run <code>python render/render.py</code>.");
       return;
     }
-    if (!S.manifest.model?.runs?.length) { showState("No runs published yet", "<br>The renderer hasn't completed a run."); return; }
-    $("modelName").textContent = `${S.manifest.model.name} ${S.manifest.model.resolution}`;
-    document.title = `WxModels — ${S.manifest.model.name} forecast maps`;
     const h = readHash();
+    const first = SOURCES.find(m => m.id === h.model && S.manifests[m.id]) || SOURCES.find(m => S.manifests[m.id]);
+    S.model = first; S.manifest = S.manifests[first.id];
     S.run = S.manifest.model.runs.find(x => x.id === h.run) || S.manifest.model.runs[0];
     S.region = S.run.regions.includes(h.region) ? h.region : S.run.regions[0];
     S.param = S.run.params.includes(h.param) ? h.param : S.run.params[0];
     S.hourIdx = Math.max(0, S.run.hours.indexOf(h.hour));
+    [...$("modelChips").children].forEach((b, i) => b.classList.toggle("active", SOURCES[i].id === first.id));
+    document.title = `WxModels — ${S.manifest.model.name} forecast maps`;
     buildRunChips(); buildSidebar(); buildTicks(); syncActive(); preload(); setHour(S.hourIdx);
   }
   boot();

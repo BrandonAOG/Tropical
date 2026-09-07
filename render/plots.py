@@ -48,7 +48,7 @@ def projection_for(bbox):
 def new_map(meta):
     fig = plt.figure(figsize=FIG_SIZE, dpi=DPI)
     proj = projection_for(meta["bbox"])
-    ax = fig.add_axes([0.01, 0.06, 0.98, 0.845], projection=proj)
+    ax = fig.add_axes([0.01, 0.08, 0.98, 0.825], projection=proj)
     ax.set_extent(meta["bbox"], crs=PC)
     return fig, ax
 
@@ -79,7 +79,7 @@ def title(fig, ax, meta, left, right_units=""):
              f"Init: {meta['run']:%a %d %b %Y %HZ}     Forecast hour {meta['fhr']:03d}     "
              f"Valid: {valid:%a %d %b %Y %HZ}",
              fontsize=10.5, ha="left", va="center", color="#333")
-    fig.text(0.01, 0.015, f"{SITE_NAME}  ·  data: NOAA/NCEP GFS via NOMADS  ·  {meta['region_name']}",
+    fig.text(0.01, 0.015, f"{SITE_NAME}  ·  data: {MODEL.get('credit', '')}  ·  {meta['region_name']}",
              fontsize=8.5, ha="left", va="center", color="#666")
     if right_units:
         fig.text(0.99, 0.015, right_units, fontsize=8.5, ha="right", va="center", color="#666")
@@ -141,7 +141,7 @@ def plot_z500_vort(f, meta):
     contour_labeled(ax, lon, lat, z, np.arange(480, 620, 6), "black", 1.0)
     add_basemap(ax)
     colorbar(fig, cf, "Absolute vorticity (10⁻⁵ s⁻¹)", ticks=levels[::2])
-    title(fig, ax, meta, "500 hPa geopotential height (dam) & absolute vorticity")
+    title(fig, ax, meta, "500 hPa height (dam) & absolute vorticity")
     return fig
 
 

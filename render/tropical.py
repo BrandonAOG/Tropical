@@ -40,6 +40,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import requests  # noqa: E402
 
+import storage  # noqa: E402
 from plots import PC, add_basemap  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -410,7 +411,13 @@ def main():
         plot_overview(basin, [s for s in storms if s["basin"] == basin], dest)
         result["overviews"][basin] = f"images/tropical/overview_{basin}.png"
 
-    (SITE / "tropical.json").write_text(json.dumps(result, indent=1))
+    if storage.enabled():
+        storage.delete_prefix("images/tropical/")
+        storage.upload_dir(OUT, "images/tropical")
+        storage.put_json(result, "tropical.json")
+        import shutil; shutil.rmtree(OUT, ignore_errors=True)
+    else:
+        (SITE / "tropical.json").write_text(json.dumps(result, indent=1))
     log.info("done: %d storms", len(storms))
 
 

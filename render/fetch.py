@@ -40,24 +40,40 @@ CFGRIB_NAMES = {
 }
 
 
+def _candidate_cycles(now: dt.datetime):
+    """Cycles in MODEL['cycles'], newest first, that are old enough to be complete."""
+    start = (now - dt.timedelta(hours=MODEL["min_age_hours"])).replace(minute=0, second=0, microsecond=0)
+    c = start
+    for _ in range(48):
+        if c.hour in MODEL["cycles"]:
+            yield c
+        c -= dt.timedelta(hours=1)
+
+
 def latest_available_run(now: dt.datetime | None = None,
                          session: requests.Session | None = None) -> dt.datetime:
-    """Newest GFS cycle whose f000 index file exists on NOMADS."""
+    """Newest cycle that's actually on the server."""
     now = now or dt.datetime.now(dt.timezone.utc)
     session = session or requests.Session()
-    candidate = now - dt.timedelta(hours=MODEL["min_age_hours"])
-    candidate = candidate.replace(minute=0, second=0, microsecond=0)
-    candidate = candidate.replace(hour=(candidate.hour // 6) * 6)
-    for _ in range(8):  # look back up to 2 days
-        url = NOMADS_IDX.format(ymd=candidate.strftime("%Y%m%d"),
-                                hh=candidate.strftime("%H"))
+    if MODEL["source"] == "ecmwf_opendata":
+        from ecmwf.opendata import Client
+        c = Client(source="ecmwf", model="ifs", resol="0p25")
+        for cand in _candidate_cycles(now):
+            try:
+                # asks for the last step: if it exists the run is complete
+                c.latest(date=cand.strftime("%Y%m%d"), time=cand.hour, type="fc", stream="oper",
+                         step=MODEL["hours"][-1], param="msl")
+                return cand
+            except Exception as e:  # noqa: BLE001
+                log.info("ECMWF %s not complete yet (%s)", cand.strftime("%Y%m%d %HZ"), type(e).__name__)
+        raise RuntimeError("No complete ECMWF run found in the last 48 h")
+    for cand in _candidate_cycles(now):
+        url = NOMADS_IDX.format(ymd=cand.strftime("%Y%m%d"), hh=cand.strftime("%H"))
         try:
-            r = session.head(url, timeout=20)
-            if r.status_code == 200:
-                return candidate
+            if session.head(url, timeout=20).status_code == 200:
+                return cand
         except requests.RequestException as e:
             log.warning("HEAD %s failed: %s", url, e)
-        candidate -= dt.timedelta(hours=6)
     raise RuntimeError("No GFS run found on NOMADS in the last 48 h")
 
 
@@ -66,6 +82,55 @@ def all_fetch_pairs(param_ids: list[str]) -> set[tuple[str, str]]:
     for pid in param_ids:
         pairs.update(PARAMS[pid]["fetch"])
     return pairs
+
+
+def ecmwf_requests(param_ids: list[str], fhr: int) -> list[dict]:
+    """Open-data requests for one forecast hour: one for pressure-level fields,
+    one for single-level fields, plus tp at the previous step so 6-h precip
+    can be de-accumulated (open-data tp is accumulated from t=0)."""
+    pl, sfc = {}, set()
+    for pid in param_ids:
+        for name, lev in (PARAMS[pid].get("ecmwf") or []):
+            if lev is None:
+                sfc.add(name)
+            else:
+                pl.setdefault(lev, set()).add(name)
+    reqs = []
+    for lev, names in pl.items():
+        reqs.append({"type": "fc", "stream": "oper", "step": fhr, "levtype": "pl",
+                     "levelist": lev, "param": sorted(names)})
+    if sfc:
+        if "tp" in sfc and fhr == 0:
+            sfc.discard("tp")
+        if sfc:
+            reqs.append({"type": "fc", "stream": "oper", "step": fhr, "levtype": "sfc", "param": sorted(sfc)})
+        if "tp" in sfc and fhr >= 6:
+            reqs.append({"type": "fc", "stream": "oper", "step": fhr - 6, "levtype": "sfc", "param": ["tp"]})
+    return reqs
+
+
+def download_ecmwf(run: dt.datetime, fhr: int, param_ids: list[str], dest: Path, retries: int = 4) -> Path:
+    """Fetch all messages for one hour into a single GRIB file. The client uses
+    the .index files to byte-range only the requested fields."""
+    from ecmwf.opendata import Client
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists() and dest.stat().st_size > 1000:
+        return dest
+    client = Client(source="ecmwf", model="ifs", resol="0p25")
+    tmp = dest.with_suffix(".part")
+    for attempt in range(retries):
+        try:
+            with open(tmp, "wb") as out:
+                for req in ecmwf_requests(param_ids, fhr):
+                    part = dest.with_suffix(f".{len(req['param'])}_{req.get('levelist', 'sfc')}_{req['step']}.grib2")
+                    client.retrieve(date=run.strftime("%Y%m%d"), time=run.hour, target=str(part), **req)
+                    out.write(part.read_bytes()); part.unlink()
+            tmp.rename(dest)
+            return dest
+        except Exception as e:  # noqa: BLE001
+            log.warning("ECMWF f%03d attempt %d failed: %s", fhr, attempt, e)
+            time.sleep(10 * (attempt + 1))
+    raise RuntimeError(f"Failed to download ECMWF f{fhr:03d}")
 
 
 def build_filter_url(run: dt.datetime, fhr: int, pairs: set[tuple[str, str]],
@@ -128,6 +193,10 @@ def load_grib(path: Path) -> Fields:
             lat = ds["latitude"].values
         for name, da in ds.data_vars.items():
             arr = da.values
+            if "step" in da.dims and da.sizes["step"] == 2:      # tp at fhr-6 and fhr
+                out[f"{name}_prev"] = np.asarray(arr[0], dtype=float)
+                arr = arr[1]
+                da = da.isel(step=1)
             # cfgrib may stack multiple levels in one variable
             if "isobaricInhPa" in da.dims:
                 for i, lev in enumerate(da["isobaricInhPa"].values):
@@ -144,6 +213,37 @@ def load_grib(path: Path) -> Fields:
     for k in list(out):
         out[k] = out[k][:, order]
     out.lon, out.lat = lon, lat
+    return normalise(out)
+
+
+def normalise(f: "Fields") -> "Fields":
+    """Map model-specific names/units onto the names plots.py expects
+    (GFS/cfgrib conventions): prmsl [Pa], tp [mm per 6 h], absv500 [s^-1],
+    pwat [mm], t2m, u10, v10, t850..."""
+    if "msl" in f and "prmsl" not in f:
+        f["prmsl"] = f.pop("msl")
+    if "tcwv" in f and "pwat" not in f:
+        f["pwat"] = f.pop("tcwv")
+    if "vo500" in f and "absv500" not in f:                      # relative -> absolute vorticity
+        _, LAT = np.meshgrid(f.lon, f.lat)
+        f["absv500"] = f["vo500"] + 2 * 7.2921e-5 * np.sin(np.radians(LAT))
+    if "tp" in f and MODEL["source"] == "ecmwf_opendata":         # m accumulated since t0 -> mm per 6 h
+        prev = f.pop("tp_prev", np.zeros_like(f["tp"]))
+        f["tp"] = np.clip(f["tp"] - prev, 0, None) * 1000.0
+    return f
+
+
+def crop(f: "Fields", bbox) -> "Fields":
+    """Cut a global grid down to a bbox (lon0, lon1, lat0, lat1)."""
+    lon0, lon1, lat0, lat1 = bbox
+    li = np.where((f.lon >= lon0) & (f.lon <= lon1))[0]
+    la = np.where((f.lat >= lat0) & (f.lat <= lat1))[0]
+    if len(li) < 4 or len(la) < 4:
+        return f
+    out = Fields()
+    out.lon, out.lat = f.lon[li], f.lat[la]
+    for k, v in f.items():
+        out[k] = v[np.ix_(la, li)]
     return out
 
 
