@@ -1,0 +1,59 @@
+{
+ "generated": "2026-09-07T17:21:19.477078+00:00",
+ "storms": [
+  {
+   "id": "al092026",
+   "basin": "al",
+   "name": "Testorm",
+   "classification": "Hurricane",
+   "lat": 16.0,
+   "lon": -55.0,
+   "intensity": 75,
+   "pressure": 985,
+   "movement": "290\u00b0 at 12 kt",
+   "advisory": "2026-09-07T12:00:00Z",
+   "nhc_url": "https://www.nhc.noaa.gov/",
+   "title": "Hurricane Testorm",
+   "cycle": "2026-09-07T12:00Z",
+   "models": [
+    "Canadian",
+    "Consensus TVCN",
+    "Decay-SHIPS",
+    "ECMWF",
+    "ECMWF AIFS",
+    "GEFS mean",
+    "GFS",
+    "Google FNV3",
+    "HAFS-A",
+    "HAFS-B",
+    "HCCA",
+    "HWRF",
+    "ICON",
+    "Intensity cons.",
+    "LGEM",
+    "NAVGEM",
+    "NHC official",
+    "SHIPS",
+    "UKMET"
+   ],
+   "gefs_members": 30,
+   "ecens_members": 0,
+   "images": {
+    "track": "images/tropical/al092026/track.png",
+    "intensity": "images/tropical/al092026/intensity.png"
+   }
+  }
+ ],
+ "overviews": {
+  "al": "images/tropical/overview_al.png"
+ },
+ "areas": [
+  {
+   "basin": "al",
+   "prob2": "20%",
+   "prob7": "60%",
+   "lat": 13.8,
+   "lon": -40.6
+  }
+ ]
+}

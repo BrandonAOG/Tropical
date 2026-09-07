@@ -672,57 +672,54 @@ def cmc_step_complete(run: dt.datetime, step: int, session, min_files: int = 40)
 
 
 # ------------------------------------------------------------- CMC GEPS -----
-# Canadian ensemble on the Datamart: one GRIB2 per field per step holding all
-# 21 members. Directory discovered (25km / 50km) and tokens resolved from the
-# listing exactly like the deterministic GDPS.
-GEPS_ROOT = "https://dd.weather.gc.ca/{ymd}/WXO-DD/model_geps/"
-_GEPS_DIR: str | None = None
-_GEPS_TOKENS: dict | None = None
+# Canadian ensemble on the Datamart (legacy layout):
+#   https://dd.weather.gc.ca/{ymd}/WXO-DD/ensemble/geps/grib2/raw/{hh}/{fhr}/
+#   CMC_geps-raw_{VAR}_{LVLTYPE}_{LVL}_latlon0p5x0p5_{ymd}{hh}_P{fhr}_allmbrs.grib2
+# Each file holds all 21 members. The filename template is derived from the
+# PRMSL file actually present, so either classic or new-style names work.
+GEPS_DIR = "https://dd.weather.gc.ca/{ymd}/WXO-DD/ensemble/geps/grib2/raw/{hh}/{fhr:03d}/"
+_GEPS_TMPL: dict | None = None      # {"file": template with {token}/{fhr}, "style": "classic"|"new", "tokens": {...}}
+
+GEPS_CLASSIC = {  # generic -> classic Datamart token (GEPS zero-pads levels: ISBL_0500)
+    "gh": "HGT_ISBL_{lev:04d}", "t": "TMP_ISBL_{lev:04d}", "u": "UGRD_ISBL_{lev:04d}", "v": "VGRD_ISBL_{lev:04d}",
+    "msl": "PRMSL_MSL_0", "tp": "APCP_SFC_0", "2t": "TMP_TGL_2", "10u": "UGRD_TGL_10", "10v": "VGRD_TGL_10",
+}
 
 
-def geps_dir(run: dt.datetime, session) -> str:
-    """Find the resolution folder under model_geps (e.g. 25km) and return the
-    step-directory template .../{hh}/{fhr:03d}/."""
-    global _GEPS_DIR
-    if _GEPS_DIR:
-        return _GEPS_DIR
-    root = GEPS_ROOT.format(ymd=run.strftime("%Y%m%d"))
-    subs = [d for d in _listing(session, root) if d.endswith("/") and not d.startswith(".")]
-    log.info("GEPS folders under %s: %s", root, subs)
-    res = next((d for d in subs if "km" in d), subs[0] if subs else "25km/")
-    _GEPS_DIR = root + res + "{hh}/{fhr:03d}/"
-    return _GEPS_DIR
-
-
-def geps_tokens(run: dt.datetime, session) -> dict:
-    global _GEPS_TOKENS
-    if _GEPS_TOKENS is not None:
-        return _GEPS_TOKENS
-    d = geps_dir(run, session)
+def geps_template(run: dt.datetime, session) -> dict:
+    global _GEPS_TMPL
+    if _GEPS_TMPL:
+        return _GEPS_TMPL
     ymd, hh = run.strftime("%Y%m%d"), run.strftime("%H")
-    names, sample = set(), None
-    for step in (0, 6):
-        for f in _listing(session, d.format(hh=hh, fhr=step)):
-            m = re.match(r".*?_MSC_GEPS_(.+?)_(LatLon[\d.x]+)_PT\d{3}H\.grib2$", f)
+    files = []
+    for step in (0, 6, 24):
+        files = [f for f in _listing(session, GEPS_DIR.format(ymd=ymd, hh=hh, fhr=step)) if f.endswith(".grib2")]
+        if files:
+            break
+    log.info("GEPS listing sample (%d files): %s", len(files), " ".join(files[:6]))
+    prm = next((f for f in files if "PRMSL" in f or "PressureMSL" in f or "Pressure_MSL" in f), None)
+    if prm and "_MSC_GEPS_" in prm:                       # new-style names, like the GDPS
+        m = re.match(r".*?_MSC_GEPS_(.+?)_(LatLon[\d.x]+)_PT(\d{3})H\.grib2$", prm)
+        names = {re.match(r".*?_MSC_GEPS_(.+?)_LatLon", f).group(1) for f in files if "_MSC_GEPS_" in f}
+        tokens = {}
+        for field, pats in CMC_PATTERNS.items():
+            for pat in pats:
+                probe = pat.format(lev="0500") if "{lev}" in pat else pat
+                hit = next((n for n in sorted(names) if re.fullmatch(probe, n)), None)
+                if hit:
+                    tokens[field] = hit.replace("0500", "{lev:04d}") if "{lev}" in pat else hit; break
+        _GEPS_TMPL = {"style": "new", "tokens": tokens,
+                      "file": f"{ymd}T{hh}Z_MSC_GEPS_{{token}}_{m.group(2)}_PT{{fhr:03d}}H.grib2"}
+    else:                                                 # classic CMC_geps-raw_* names
+        grid = "latlon0p5x0p5"
+        if prm:
+            m = re.search(r"_(latlon[\dp x]+?)_\d{10}_P\d{3}", prm)
             if m:
-                names.add(m.group(1)); sample = sample or m.group(2)
-    tokens: dict = {}
-    for field, pats in CMC_PATTERNS.items():
-        for pat in pats:
-            probe = pat.format(lev="0500") if "{lev}" in pat else pat
-            hit = next((n for n in sorted(names) if re.fullmatch(probe, n)), None)
-            if hit:
-                tokens[field] = hit.replace("0500", "{lev:04d}") if "{lev}" in pat else hit
-                break
-    if not names:
-        log.warning("GEPS: listing unavailable; using GDPS field names")
-        tokens = dict(CMC_DEFAULT_TOKENS)
-    tokens["_grid"] = sample or "LatLon0.5"
-    log.info("GEPS resolved fields: %s", {k: v for k, v in tokens.items() if not k.startswith("_")})
-    others = sorted(n for n in names if n not in tokens.values())
-    log.info("GEPS other variables (%d): %s", len(others), " ".join(others[:60]))
-    _GEPS_TOKENS = tokens
-    return tokens
+                grid = m.group(1)
+        _GEPS_TMPL = {"style": "classic", "tokens": dict(GEPS_CLASSIC),
+                      "file": f"CMC_geps-raw_{{token}}_{grid}_{ymd}{hh}_P{{fhr:03d}}_allmbrs.grib2"}
+    log.info("GEPS template: %s (%s)", _GEPS_TMPL["file"], _GEPS_TMPL["style"])
+    return _GEPS_TMPL
 
 
 def download_geps(run: dt.datetime, step: int, fields, dest: Path, session: requests.Session | None = None) -> Path:
@@ -731,18 +728,18 @@ def download_geps(run: dt.datetime, step: int, fields, dest: Path, session: requ
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() and dest.stat().st_size > 1000:
         return dest
-    tok = geps_tokens(run, session); d = geps_dir(run, session)
+    tm = geps_template(run, session)
     ymd, hh = run.strftime("%Y%m%d"), run.strftime("%H")
     tmp = dest.with_suffix(".part"); got = 0
     with open(tmp, "wb") as out:
         for name, lev in fields:
             if name == "tp" and step == 0:
                 continue
-            t = tok.get(name)
+            t = tm["tokens"].get(name)
             if not t:
                 log.warning("GEPS: no token for %s", name); continue
             token = t.format(lev=int(lev)) if lev is not None else t
-            url = d.format(hh=hh, fhr=step) + f"{ymd}T{hh}Z_MSC_GEPS_{token}_{tok['_grid']}_PT{step:03d}H.grib2"
+            url = GEPS_DIR.format(ymd=ymd, hh=hh, fhr=step) + tm["file"].format(token=token, fhr=step)
             for attempt in range(4):
                 try:
                     r = session.get(url, timeout=300)
@@ -761,8 +758,8 @@ def download_geps(run: dt.datetime, step: int, fields, dest: Path, session: requ
 
 
 def geps_step_complete(run: dt.datetime, step: int, session, min_files: int = 10) -> bool:
-    files = [f for f in _listing(session, geps_dir(run, session).format(hh=run.strftime("%H"), fhr=step)) if f.endswith(".grib2")]
-    ok = len(files) >= min_files and any("MSL" in f for f in files)
+    files = [f for f in _listing(session, GEPS_DIR.format(ymd=run.strftime("%Y%m%d"), hh=run.strftime("%H"), fhr=step)) if f.endswith(".grib2")]
+    ok = len(files) >= min_files and any("PRMSL" in f or "MSL" in f for f in files)
     if not ok:
         log.info("GEPS step %03d: %d files present, not complete", step, len(files))
     return ok
