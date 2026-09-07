@@ -130,6 +130,8 @@ jobs:
           find site/images -name '*.png' | wc -l
       - name: Render tropical page
         run: python render/tropical.py
+      - name: Render plumes
+        run: python render/plumes.py
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
