@@ -212,6 +212,43 @@ def download(url: str, dest: Path, session: requests.Session, retries: int = 4) 
     raise RuntimeError(f"Failed to download {url}")
 
 
+def _group_of(lev: str) -> str:
+    if lev.endswith("_mb"):
+        return "iso"
+    if lev.startswith("PV"):
+        return "pv"
+    if lev.startswith("top_of_atmosphere"):
+        return "toa"
+    return "sfc"
+
+
+def download_grouped(run: dt.datetime, fhr: int, pairs: set, bbox, dest: Path,
+                     session: requests.Session, retries: int = 3) -> Path:
+    """GFS: NOMADS grib_filter chokes on one huge var×level request, so fetch in
+    groups (isobaric / surface-ish / PV / top-of-atmosphere) and concatenate.
+    A failing group is logged and skipped; the frame still renders what it can."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists() and dest.stat().st_size > 1000:
+        return dest
+    groups: dict[str, set] = {}
+    for var, lev in pairs:
+        groups.setdefault(_group_of(lev), set()).add((var, lev))
+    parts = []
+    for name, grp in sorted(groups.items()):
+        part = dest.with_suffix(f".{name}.grb2")
+        try:
+            download(build_filter_url(run, fhr, grp, bbox), part, session, retries=retries)
+            parts.append(part)
+        except RuntimeError as e:
+            log.warning("f%03d group %s failed (%s): %s", fhr, name, sorted(grp)[:3], e)
+    if not parts:
+        raise RuntimeError(f"All download groups failed for f{fhr:03d}")
+    with open(dest, "wb") as out:
+        for part in parts:
+            out.write(part.read_bytes()); part.unlink()
+    return dest
+
+
 class Fields(dict):
     """A dict of name -> 2D numpy array, plus shared lon/lat 1-D coordinates."""
     lon: np.ndarray

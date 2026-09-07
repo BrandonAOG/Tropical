@@ -36,7 +36,7 @@ import requests  # noqa: E402
 import plots  # noqa: E402
 import storage  # noqa: E402
 from config import (FORECAST_HOURS, KEEP_RUNS, MODEL, PARAMS, REGIONS, model_params, param_hours)  # noqa: E402
-from fetch import (all_fetch_pairs, build_filter_url, crop, download, download_ecmwf, ecmwf_pairs,
+from fetch import (all_fetch_pairs, build_filter_url, crop, download, download_ecmwf, download_grouped, ecmwf_pairs,
                    latest_available_run, load_grib, merge, normalise, prev_steps, step_for,
                    synthetic_fields)  # noqa: E402
 
@@ -234,7 +234,7 @@ def main():
             files = {}
             try:
                 dest = grib_dir / f"{region}_f{fhr:03d}.grb2"
-                download(build_filter_url(run, fhr, pairs, bbox), dest, session)
+                download_grouped(run, fhr, pairs, bbox, dest, session)
                 files[""] = str(dest)
             except RuntimeError as e:
                 log.error("%s", e); continue
