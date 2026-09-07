@@ -21,6 +21,7 @@ MODELS = {
         "min_age_hours": 3.5,          # how long after cycle time f000..f384 are complete
         # 3-hourly to 240 h, 12-hourly to 384 h
         "hours": list(range(0, 241, 6)) + list(range(252, 361, 12)),
+        "probe_max_hours": [360, 240],  # publish a 240-h run as soon as it's there; re-render to 360 when the rest lands
         "params": None,                 # None = every product in PARAMS
         "credit": "NOAA/NCEP GFS via NOMADS",
     },

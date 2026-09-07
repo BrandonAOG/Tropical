@@ -74,15 +74,10 @@ def latest_available_run(now: dt.datetime | None = None,
         if MODEL["source"].startswith("ecmwf"):
             ecmwf_explain(now, session)
         raise RuntimeError(f"No complete {MODEL['name']} run found in the last 48 h")
-    # GFS on NOMADS: a run is complete once its LAST hour's index file exists
-    last = MODEL["hours"][-1]
+    # GFS on NOMADS: usable once hour 240 is on the server (hours to 360 follow ~1 h later)
     for cand in _candidate_cycles(now):
-        url = NOMADS_IDX.format(ymd=cand.strftime("%Y%m%d"), hh=cand.strftime("%H")).replace("f000.idx", f"f{last:03d}.idx")
-        try:
-            if session.head(url, timeout=20).status_code == 200:
-                return cand
-        except requests.RequestException as e:
-            log.warning("HEAD %s failed: %s", url, e)
+        if run_max_hour(cand, session) is not None:
+            return cand
     raise RuntimeError("No GFS run found on NOMADS in the last 48 h")
 
 
@@ -133,9 +128,16 @@ def _probe_url(run: dt.datetime, step: int, session=None) -> str | None:
 def run_max_hour(run: dt.datetime, session: requests.Session | None = None) -> int | None:
     """Furthest forecast hour available for this run, or None if the run isn't
     complete at any known range. GFS is always the full range."""
-    if MODEL["source"] == "nomads":
-        return MODEL["hours"][-1]
     session = session or requests.Session()
+    if MODEL["source"] == "nomads":
+        for last in MODEL.get("probe_max_hours", [MODEL["hours"][-1]]):
+            url = NOMADS_IDX.format(ymd=run.strftime("%Y%m%d"), hh=run.strftime("%H")).replace("f000.idx", f"f{last:03d}.idx")
+            try:
+                if session.head(url, timeout=20).status_code == 200:
+                    return last
+            except requests.RequestException as e:
+                log.warning("HEAD %s failed: %s", url, e)
+        return None
     for last in MODEL.get("probe_max_hours", [MODEL["hours"][-1]]):
         if MODEL["source"] == "cmc":
             # also require the last 6-hourly step before the end, so a run whose
@@ -1057,8 +1059,12 @@ def normalise(f: "Fields", fhr: int = 0) -> "Fields":
         _, LAT = np.meshgrid(f.lon, f.lat)
         f["absv500"] = rel_vort(f["u500"], f["v500"], f.lon, f.lat) + 2 * 7.2921e-5 * np.sin(np.radians(LAT))
     if accum_from_zero:
-        if src == "ecmwf_opendata":                              # ECMWF tp is metres; CMC/ICON are mm
-            for k in [k for k in f if k.startswith("tp_acc")]:
+        # Units: ECMWF IFS (deterministic and ENS) publish tp in metres; CMC, ICON and AIFS
+        # in mm. Detect rather than assume: a run-total in mm exceeds 3 somewhere in any
+        # domain this size, a total in metres never does.
+        for k in [k for k in f if k.startswith("tp_acc")]:
+            mx = np.nanmax(f[k]) if np.isfinite(f[k]).any() else 0.0
+            if 0 < mx < 3.0:
                 f[k] = f[k] * 1000.0
         if "tp_acc" in f:
             prev = f.get("tp_acc_m6", np.zeros_like(f["tp_acc"]))
