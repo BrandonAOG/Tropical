@@ -74,6 +74,15 @@ def latest_available_run(now: dt.datetime | None = None,
         if MODEL["source"].startswith("ecmwf"):
             ecmwf_explain(now, session)
         raise RuntimeError(f"No complete {MODEL['name']} run found in the last 48 h")
+    # GFS on NOMADS: the f000 index file appears once the run is on the server
+    for cand in _candidate_cycles(now):
+        url = NOMADS_IDX.format(ymd=cand.strftime("%Y%m%d"), hh=cand.strftime("%H"))
+        try:
+            if session.head(url, timeout=20).status_code == 200:
+                return cand
+        except requests.RequestException as e:
+            log.warning("HEAD %s failed: %s", url, e)
+    raise RuntimeError("No GFS run found on NOMADS in the last 48 h")
 
 
 def ecmwf_explain(now, session):
