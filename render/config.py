@@ -259,10 +259,8 @@ PARAMS = {
                   ("VGRD", "PV=2e-06_(Km^2/kg/s)_surface")],
         "spec": None
     },
-    "sim_ir": {
-        "name": "Simulated IR satellite", "group": "Upper dynamics", "plot": "plot_sim_ir",
-        "fetch": _MSLP + [("SBT124", "top_of_atmosphere")], "spec": None
-    },
+    # "sim_ir": simulated IR brightness temperature (SBT124). Not present in NOAA's
+    # 0.25° GFS files (verified from the .idx listings, Sep 2026); kept out until it is.
     "shear": {
         "name": "850–200 mb wind shear", "group": "Tropical", "plot": "plot_shear",
         "fetch": [("UGRD", "850_mb"), ("VGRD", "850_mb"), ("UGRD", "200_mb"), ("VGRD", "200_mb"), ("HGT", "500_mb")],
