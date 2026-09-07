@@ -14,7 +14,7 @@ import numpy as np
 from scipy.ndimage import gaussian_filter, minimum_filter
 
 from config import MODEL
-from plots import PC, add_basemap, colorbar, contour_labeled, mesh, new_map, title
+from plots import PC, add_basemap, colorbar, contour_labeled, mesh, mslp_levels, new_map, title, z500_levels
 
 MEMBER_COLORS = plt.get_cmap("tab20")
 
@@ -56,12 +56,12 @@ def _mean_spread(stack, meta, key, scale, unit, mean_levels, spread_bounds, labe
 
 
 def ens_mslp(stack, meta):
-    return _mean_spread(stack, meta, "prmsl", 0.01, "mb", np.arange(940, 1060, 4), [1, 2, 3, 4, 6, 8, 10, 12, 16, 20],
+    return _mean_spread(stack, meta, "prmsl", 0.01, "mb", mslp_levels(), [0.5, 1, 2, 3, 4, 6, 8, 10, 12, 16],
                         "MSLP", "MSLP ensemble mean (mb, contours) & spread")
 
 
 def ens_z500(stack, meta):
-    return _mean_spread(stack, meta, "gh500", 0.1, "dam", np.arange(480, 620, 6), [1, 2, 3, 4, 6, 8, 10, 12, 16, 20],
+    return _mean_spread(stack, meta, "gh500", 0.1, "dam", z500_levels(), [0.5, 1, 2, 3, 4, 6, 8, 10, 12, 16],
                         "500 mb", "500 mb height ensemble mean (dam) & spread", cmap="PuRd")
 
 
@@ -131,7 +131,7 @@ def ens_lows(stack, meta):
     mean = _s(np.nanmean(p_all, axis=0)); spread = _s(np.nanstd(p_all, axis=0))
     norm = mcolors.BoundaryNorm(SPREAD_BOUNDS, SPREAD_CMAP.N)
     cf = mesh(ax, lon, lat, spread, None, cmap=SPREAD_CMAP, norm=norm, transform=PC, zorder=2)
-    contour_labeled(ax, lon, lat, mean, np.arange(940, 1060, 4), "black", 0.9)
+    contour_labeled(ax, lon, lat, mean, mslp_levels(), "black", 0.9)
     pb = [940, 960, 970, 980, 990, 996, 1000, 1004, 1008, 1012]
     pcm = mcolors.ListedColormap(["#5e0a5e", "#9b0c3d", "#d0021b", "#f05a28", "#f5a623", "#7ed321", "#1e8f3a", "#2b8cbe", "#7fb3d5"])
     pnorm = mcolors.BoundaryNorm(pb, pcm.N)
@@ -197,7 +197,7 @@ def _prob(stack, meta, mask_stack, title_txt, extra=None):
     if extra:
         extra(ax)
     mean = _s(np.nanmean(stack["prmsl"], axis=0) / 100)
-    ax.contour(lon, lat, mean, levels=np.arange(940, 1060, 4), colors="#555", linewidths=0.6, transform=PC, zorder=4)
+    ax.contour(lon, lat, mean, levels=mslp_levels(), colors="#555", linewidths=0.6, transform=PC, zorder=4)
     add_basemap(ax)
     colorbar(fig, cf, "Probability (% of members)", ticks=PROB_BOUNDS)
     title(fig, ax, meta, subtitle(meta, title_txt + " & mean MSLP (mb)"))

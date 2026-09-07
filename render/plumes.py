@@ -198,6 +198,68 @@ def plot_city(cid, name, lat, lon, data, init, dest: Path):
     return rows
 
 
+SW_CLUSTER = ["siestakey", "venice", "englewood", "portcharlotte", "puntagorda", "pineisland", "capecoral", "fortmyers",
+              "sanibel", "fmbeach", "estero", "bonita", "naples", "marcoisland"]
+
+
+def plot_overview(summary, init, dest: Path):
+    """Florida map: each city coloured by all-ensemble mean peak wind, labelled
+    with peak wind (kt) and 10-day rain total (in). The crowded southwest coast
+    gets an inset zoom over the Gulf."""
+    import matplotlib.colors as mcolors
+    import matplotlib.patheffects as pe
+    from plots import PC, add_basemap
+    fig = plt.figure(figsize=(12, 9), dpi=100); fig.patch.set_facecolor("#f1f4f7")
+    bounds = [0, 20, 34, 50, 64, 83, 96, 113, 140]
+    cmap = mcolors.ListedColormap(["#9ecae1", "#41ab5d", "#f7e530", "#f5a623", "#f05a28", "#d0021b", "#9b0c3d", "#5e0a5e"])
+    norm = mcolors.BoundaryNorm(bounds, cmap.N)
+
+    def draw(ax, extent, cities, offsets, fs):
+        ax.set_extent(extent, crs=PC); ax.set_facecolor("#dfe9f1")
+        try:
+            import cartopy.feature as cfeature
+            land = cfeature.LAND.with_scale("50m"); next(iter(land.geometries()))
+            ax.add_feature(land, facecolor="#f7f4ea", zorder=1)
+        except Exception:  # noqa: BLE001
+            pass
+        add_basemap(ax)
+        for c in cities:
+            col = cmap(norm(c["peak_kt"] or 0))
+            ax.plot(c["lon"], c["lat"], "o", ms=10, color=col, mec="white", mew=1.2, transform=PC, zorder=6)
+            dx, dy = offsets.get(c["id"], (0.12, 0.05))
+            ax.text(c["lon"] + dx, c["lat"] + dy, f"{c['name']}  {c['peak_kt']} kt · {c['rain_in']:.1f} in", fontsize=fs, fontweight="bold",
+                    ha="left" if dx > 0 else "right", va="center", transform=PC, zorder=7, color="#17212b",
+                    path_effects=[pe.withStroke(linewidth=2.5, foreground="white")])
+
+    main_cities = [c for c in summary if c["id"] not in SW_CLUSTER]
+    sw = [c for c in summary if c["id"] in SW_CLUSTER]
+    ax = fig.add_axes([0.02, 0.06, 0.96, 0.84], projection=PC)
+    draw(ax, (-88.5, -78.5, 24.0, 31.5), main_cities,
+         {"panamacity": (0.1, -0.3), "pensacola": (0.1, -0.3), "keywest": (0.15, -0.15), "tampa": (-0.15, 0.1), "sarasota": (-0.15, -0.05),
+          "miami": (0.15, -0.05), "ftlauderdale": (0.15, 0.05), "westpalm": (0.15, 0.05)}, 9)
+    # box marking the inset area on the main map
+    x0, x1, y0, y1 = -83.7, -81.3, 25.75, 27.5
+    ax.plot([x0, x1, x1, x0, x0], [y0, y0, y1, y1, y0], color="#0e7c86", lw=1.4, transform=PC, zorder=8)
+    if sw:
+        ins = fig.add_axes([0.05, 0.10, 0.40, 0.50], projection=PC)
+        ins.spines["geo"].set_edgecolor("#0e7c86"); ins.spines["geo"].set_linewidth(1.6)
+        left = {k: (-0.05, 0.0) for k in ["siestakey", "venice", "englewood", "portcharlotte", "pineisland", "sanibel", "fmbeach"]}
+        right = {k: (0.05, 0.0) for k in ["puntagorda", "fortmyers", "capecoral", "estero", "bonita", "naples", "marcoisland"]}
+        left["englewood"] = (-0.05, -0.06); right["puntagorda"] = (0.05, 0.06)
+        left["pineisland"] = (-0.05, 0.08); right["capecoral"] = (0.05, -0.05); right["fortmyers"] = (0.05, 0.07)
+        left["sanibel"] = (-0.05, 0.03); left["fmbeach"] = (-0.05, -0.10)
+        draw(ins, (x0, x1, y0, y1), sw, {**left, **right}, 8)
+        ins.set_title("Southwest coast", fontsize=9, fontweight="bold", color="#0e7c86", loc="left", pad=3)
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm); sm.set_array([])
+    cax = fig.add_axes([0.30, 0.058, 0.45, 0.014]); cb = fig.colorbar(sm, cax=cax, orientation="horizontal", ticks=bounds)
+    cb.ax.tick_params(labelsize=8); cb.set_label("Peak 10 m wind, all-ensemble mean (kt) — TS 34 · Cat 1 64 · Cat 2 83 · Cat 3 96", fontsize=8.5)
+    fig.text(0.02, 0.955, "Florida ensemble outlook — next 10 days", fontsize=16, fontweight="bold", color="#17212b")
+    fig.text(0.02, 0.925, f"Label: peak wind (kt) · total rainfall (in), averaged across all ensembles · updated {init:%a %d %b %Y %H:%M}Z",
+             fontsize=10, color="#5d6c7b")
+    fig.text(0.02, 0.006, "WxModels · via Open-Meteo · model output, not an official forecast", fontsize=8.5, color="#8a97a5")
+    fig.savefig(dest, facecolor=fig.get_facecolor()); plt.close(fig)
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--synthetic", action="store_true"); args = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
@@ -219,12 +281,21 @@ def main():
         except Exception as e:  # noqa: BLE001
             plt.close("all"); log.error("%s: plot failed: %s", name, str(e)[:160]); continue
         best = max(rows, key=lambda r: r[1]) if rows else None
-        result["cities"].append({"id": cid, "name": name, "lat": lat, "lon": lon, "image": f"images/plumes/{cid}.png",
-                                 "peak_kt": round(best[1]) if best else None, "peak_model": best[0] if best else None,
-                                 "peak_time": best[2].isoformat() + "Z" if best else None,
-                                 "p34": round(max(r[3] for r in rows)) if rows else None, "p64": round(max(r[4] for r in rows)) if rows else None})
+        rains = [float(np.nansum(np.nanmean(np.nan_to_num(d["precipitation"], nan=0.0), axis=0))) for _, d in data if "precipitation" in d]
+        entry = {"id": cid, "name": name, "lat": lat, "lon": lon, "image": f"images/plumes/{cid}.png",
+                 "peak_kt": round(float(np.mean([r[1] for r in rows]))) if rows else None,     # all-ensemble mean of peaks
+                 "max_kt": round(best[1]) if best else None, "peak_model": best[0] if best else None,
+                 "peak_time": best[2].isoformat() + "Z" if best else None,
+                 "rain_in": round(float(np.mean(rains)), 1) if rains else 0.0,
+                 "p34": round(max(r[3] for r in rows)) if rows else None, "p64": round(max(r[4] for r in rows)) if rows else None}
+        result["cities"].append(entry)
         log.info("%s: %d ensembles", name, len(data))
     result["models"] = sorted(seen_models)
+    if result["cities"]:
+        try:
+            plot_overview(result["cities"], now, OUT / "overview.png"); result["overview"] = "images/plumes/overview.png"
+        except Exception as e:  # noqa: BLE001
+            plt.close("all"); log.error("overview failed: %s", str(e)[:160])
     (SITE / "plumes.json").write_text(json.dumps(result, indent=1))
     log.info("done: %d cities", len(result["cities"]))
 

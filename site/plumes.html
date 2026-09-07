@@ -186,6 +186,7 @@
   <div class="detail" style="margin-top:14px">
     <div class="graphic"><img id="img" alt="Ensemble plumes"></div>
   </div>
+  <div class="detail" style="margin-top:16px" id="ovwrap" hidden><div class="graphic"><img id="ovimg" alt="Florida ensemble outlook map"></div></div>
   <div id="grid" class="grid"></div>
   <p class="attribution">Each chart shows every available ensemble's spread (10th–90th percentile of members) and mean for wind gusts and 6-hour rainfall at that city, out to 10 days. Point forecasts come from <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>, which redistributes NOAA, ECMWF, ECCC, DWD, UK Met Office and Google WeatherNext data. Model output is not an official forecast — see the <a href="https://www.nhc.noaa.gov/">National Hurricane Center</a> and your local NWS office.</p>
 </main>
@@ -210,11 +211,12 @@
     try { const r = await fetch(BASE + "plumes.json", { cache: "no-store" }); if (!r.ok) throw 0; data = await r.json(); }
     catch (e) { $("empty").hidden = false; $("empty").innerHTML = "<strong>Plumes haven't been published yet</strong>The renderer writes plumes.json on its next scheduled run."; return; }
     $("note").textContent = `${data.models.length} ensembles · updated ${fmt(data.generated)}`;
+    if (data.overview) { $("ovwrap").hidden = false; $("ovimg").src = BASE + data.overview + "?v=" + encodeURIComponent(data.generated); }
     for (const c of data.cities) { const o = document.createElement("option"); o.value = c.id; o.textContent = c.name; $("city").appendChild(o); }
     $("city").onchange = (e) => show(e.target.value);
     for (const c of data.cities) {
       const b = document.createElement("button"); b.className = "card" + ((c.p64 || 0) >= 30 ? " hi" : ""); b.dataset.id = c.id;
-      b.innerHTML = `<div class="n">${c.name}</div><div class="s">peak <b>${c.peak_kt ?? "—"} kt</b> · P(≥64) <b>${c.p64 ?? "—"}%</b>${c.peak_time ? ` · ${fmt(c.peak_time)}` : ""}</div>`;
+      b.innerHTML = `<div class="n">${c.name}</div><div class="s">peak <b>${c.peak_kt ?? "—"} kt</b> · rain <b>${c.rain_in ?? "—"} in</b> · P(≥64) <b>${c.p64 ?? "—"}%</b></div>`;
       b.onclick = () => show(c.id); $("grid").appendChild(b);
     }
     show(location.hash.replace("#", ""));
