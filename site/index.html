@@ -93,7 +93,7 @@
 
   /* ---- transport ---- */
   .transport {
-    display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: center;
+    display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 18px; align-items: center; min-width: 0;
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px;
   }
   .readout { display: flex; align-items: baseline; gap: 12px; min-width: 240px; }
@@ -102,10 +102,10 @@
   .readout .valid { font-size: 13px; color: var(--muted); line-height: 1.25; }
   .readout .valid b { display: block; color: var(--ink); font-weight: 600; font-size: 14px; }
 
-  .ticks { display: flex; gap: 3px; align-items: flex-end; height: 34px; touch-action: none; cursor: ew-resize; user-select: none; -webkit-user-select: none; }
+  .ticks { display: flex; gap: 3px; align-items: flex-end; height: 34px; min-width: 0; overflow: hidden; touch-action: none; cursor: ew-resize; user-select: none; -webkit-user-select: none; }
   .ticks.scrubbing button.active::before { background: var(--amber); }
   .ticks button {
-    flex: 1; height: 100%; position: relative; border-radius: 3px; min-width: 0;
+    flex: 1 1 0; height: 100%; position: relative; border-radius: 3px; min-width: 0; padding: 0; margin: 0;
   }
   .ticks button::before {
     content: ""; position: absolute; left: 50%; bottom: 8px; width: 2px; height: 10px; background: var(--line); transform: translateX(-50%);
@@ -145,7 +145,11 @@
     .mobile-selects { display: flex; }
     section.viewer { padding: 12px; }
     .transport { grid-template-columns: 1fr 1fr; grid-template-rows: auto auto; gap: 12px; }
-    .ticks { grid-column: 1 / -1; height: 44px; padding-top: 6px; }
+    .ticks { grid-column: 1 / -1; height: 44px; padding-top: 6px; gap: 1px; }
+    .ticks.dense button:nth-child(8n+1)::after { display: none; }
+    .ticks.dense button:nth-child(12n+1)::after { display: block; }
+    body { overflow-x: hidden; }
+    section.viewer { min-width: 0; }
     .readout { min-width: 0; }
     .readout .hour { font-size: 36px; }
     .controls { justify-content: flex-end; }

@@ -4,6 +4,8 @@
 window.WX_MODELS = [
   { id: "gfs",   name: "GFS",   base: "" },
   { id: "ecmwf", name: "ECMWF", base: "https://brandonaog.github.io/wx-ecmwf/" },
+  { id: "cmc",   name: "CMC",   base: "https://brandonaog.github.io/wx-cmc/" },
+  { id: "icon",  name: "ICON",  base: "https://brandonaog.github.io/wx-icon/" },
 ];
 // Optional single override for everything (e.g. an R2 bucket URL). Leave "".
 window.WX_ASSETS = "";
