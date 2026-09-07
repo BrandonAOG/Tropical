@@ -80,19 +80,33 @@ ENSEMBLES = [
     ("ncep_aigefs025",             "AI-GEFS",              "#e8590c"),
     ("google_weathernext2_ensemble", "Google WeatherNext 2", "#00a86b"),
 ]
-VARS = ["wind_gusts_10m", "precipitation", "pressure_msl"]
+VARS = ["wind_gusts_10m", "wind_speed_10m", "precipitation", "pressure_msl"]
+
+
+import time as _time
+PACE_S = 0.6            # seconds between requests: keeps well under Open-Meteo's per-minute limit
 
 
 def fetch(lat, lon, model, session):
     """-> {"time": [datetime], var: 2-D array (member, time)} or None"""
     params = {"latitude": lat, "longitude": lon, "hourly": ",".join(VARS), "models": model,
               "forecast_days": DAYS, "wind_speed_unit": "kn", "precipitation_unit": "inch", "timezone": "GMT"}
-    try:
-        r = session.get(API, params=params, timeout=60)
-    except requests.RequestException as e:
-        log.warning("%s: %s", model, e); return None
-    if r.status_code != 200:
-        log.warning("%s -> HTTP %s: %s", model, r.status_code, r.text[:300]); return None
+    r = None
+    for attempt in range(4):
+        _time.sleep(PACE_S)
+        try:
+            r = session.get(API, params=params, timeout=60)
+        except requests.RequestException as e:
+            log.warning("%s: %s", model, e); r = None
+        if r is not None and r.status_code == 200:
+            break
+        if r is not None and r.status_code == 429:           # rate limited: back off and retry
+            wait = 15 * (attempt + 1)
+            log.warning("%s: rate limited, waiting %ds", model, wait); _time.sleep(wait); continue
+        if r is not None:
+            log.warning("%s -> HTTP %s: %s", model, r.status_code, r.text[:300]); return None
+    if r is None or r.status_code != 200:
+        return None
     h = r.json().get("hourly", {})
     times = [dt.datetime.fromisoformat(t) for t in h.get("time", [])]
     out = {"time": times}
@@ -112,7 +126,10 @@ def synthetic(lat, lon, model_i, rng, n=30):
     g = np.array([12 + amp * np.exp(-((h - 110 - shift - rng.normal() * 6) / 20) ** 2) + rng.normal(0, 2, len(h)) for _ in range(n)])
     p = np.array([np.clip(0.35 * np.exp(-((h - 110 - shift - rng.normal() * 6) / 16) ** 2) + 0.02 * rng.random(len(h)), 0, None) for _ in range(n)])
     m = np.array([101300 - 3500 * np.exp(-((h - 110 - shift - rng.normal() * 6) / 20) ** 2) + rng.normal(0, 150, len(h)) for _ in range(n)]) / 100
-    return {"time": times, "wind_gusts_10m": g, "precipitation": p, "pressure_msl": m}
+    out = {"time": times, "wind_gusts_10m": g, "precipitation": p, "pressure_msl": m}
+    if model_i % 3 == 1:                                  # mimic models without gusts
+        out["wind_speed_10m"] = out.pop("wind_gusts_10m") * 0.78
+    return out
 
 
 def six_hourly(times, arr):
@@ -130,28 +147,32 @@ def plot_city(cid, name, lat, lon, data, init, dest: Path):
     rows = []
     for (mid, label, color), d in data:
         t = d["time"]
-        if "wind_gusts_10m" in d and np.isfinite(d["wind_gusts_10m"]).any():
-            g = d["wind_gusts_10m"]
+        # gusts where the model provides them; otherwise sustained wind, drawn dashed
+        has_gust = "wind_gusts_10m" in d and np.isfinite(d["wind_gusts_10m"]).any()
+        wkey = "wind_gusts_10m" if has_gust else ("wind_speed_10m" if "wind_speed_10m" in d and np.isfinite(d["wind_speed_10m"]).any() else None)
+        if wkey:
+            g = d[wkey]
             g = g[np.isfinite(g).any(axis=1)]                 # drop members that are entirely empty
             ax_g.fill_between(t, np.nanpercentile(g, 10, axis=0), np.nanpercentile(g, 90, axis=0), color=color, alpha=0.10, lw=0)
-            ax_g.plot(t, np.nanmean(g, axis=0), color=color, lw=2, label=f"{label} ({g.shape[0]})")
+            ax_g.plot(t, np.nanmean(g, axis=0), color=color, lw=2, ls="-" if has_gust else (0, (4, 2)),
+                      label=f"{label} ({g.shape[0]})" + ("" if has_gust else " — sustained"))
             mean_g = np.nanmean(g, axis=0)
             if not np.isfinite(mean_g).any():
                 continue
             peak = np.nanmax(mean_g); when = t[int(np.nanargmax(np.nan_to_num(mean_g, nan=-1)))]
             p64 = 100 * np.nanmean(np.nanmax(g, axis=1) >= 64); p34 = 100 * np.nanmean(np.nanmax(g, axis=1) >= 34)
-            rows.append((label, peak, when, p34, p64, g.shape[0]))
+            rows.append((label + ("" if has_gust else "*"), peak, when, p34, p64, g.shape[0]))
         if "precipitation" in d and np.isfinite(d["precipitation"]).any():
             t6, p6 = six_hourly(t, np.nan_to_num(d["precipitation"], nan=0.0))
             ax_r.fill_between(t6, np.nanpercentile(p6, 10, axis=0), np.nanpercentile(p6, 90, axis=0), color=color, alpha=0.10, lw=0)
             ax_r.plot(t6, np.nanmean(p6, axis=0), color=color, lw=2)
     top = min(160, max(60, 10 * int(np.ceil((max([r[1] for r in rows] + [40]) * 1.25) / 10))))
-    ax_g.set_ylim(0, top); ax_g.set_ylabel("10 m wind gust (kt)")
+    ax_g.set_ylim(0, top); ax_g.set_ylabel("10 m wind (kt): gusts solid, sustained dashed")
     for y, lab in [(34, "TS"), (64, "Cat 1"), (83, "Cat 2"), (96, "Cat 3"), (113, "Cat 4"), (137, "Cat 5")]:
         if y < top:
             ax_g.axhline(y, color="#bbb", lw=0.7, ls=":")
             ax_g.text(1.0, y, " " + lab, transform=ax_g.get_yaxis_transform(), fontsize=8, color="#888", va="center")
-    ax_g.set_title("Wind gusts", loc="left", fontsize=12, fontweight="bold", color="#17212b")
+    ax_g.set_title("Wind", loc="left", fontsize=12, fontweight="bold", color="#17212b")
     ax_r.set_ylabel("6-hr precipitation (in)"); ax_r.set_title("Rainfall", loc="left", fontsize=12, fontweight="bold", color="#17212b")
     ax_r.set_ylim(0, None)
     for ax in (ax_g, ax_r):
@@ -161,7 +182,7 @@ def plot_city(cid, name, lat, lon, data, init, dest: Path):
     ax_g.legend(loc="upper left", bbox_to_anchor=(1.03, 1.0), frameon=False, fontsize=9.5, title="Ensembles (members)", title_fontsize=10)
     # summary table
     tx = fig.add_axes([0.745, 0.09, 0.24, 0.36]); tx.axis("off")
-    tx.text(0, 1, "Peak gust by ensemble", fontsize=12, fontweight="bold", va="top", color="#17212b")
+    tx.text(0, 1, "Peak wind by ensemble", fontsize=12, fontweight="bold", va="top", color="#17212b")
     for x, h in [(0, "model"), (0.52, "mean peak"), (0.78, "P(≥34)"), (0.92, "P(≥64)")]:
         tx.text(x, 0.88, h, fontsize=8.5, color="#5d6c7b", va="top")
     for i, (label, peak, when, p34, p64, n) in enumerate(sorted(rows, key=lambda r: -r[1])):
@@ -171,7 +192,7 @@ def plot_city(cid, name, lat, lon, data, init, dest: Path):
         tx.text(0.78, y, f"{p34:.0f}%", fontsize=9.5, va="top", color="#c81e1e" if p34 >= 50 else "#17212b")
         tx.text(0.92, y, f"{p64:.0f}%", fontsize=9.5, va="top", color="#c81e1e" if p64 >= 30 else "#17212b")
         tx.text(0, y - 0.04, f"{when:%a %d %b %HZ}", fontsize=7.5, va="top", color="#8a97a5")
-    fig.text(0.04, 0.03, "WxModels · point forecasts via Open-Meteo (NOAA, ECMWF, ECCC, DWD, UKMO, Google) · model output, not an official forecast · P(≥) = share of members reaching that gust at any time",
+    fig.text(0.04, 0.03, "WxModels · point forecasts via Open-Meteo (NOAA, ECMWF, ECCC, DWD, UKMO, Google) · model output, not an official forecast · P(≥) = share of members reaching that wind at any time · * = sustained wind (model gives no gusts)",
              fontsize=8.5, color="#8a97a5")
     fig.savefig(dest, facecolor=fig.get_facecolor()); plt.close(fig)
     return rows
@@ -189,7 +210,7 @@ def main():
         data = []
         for i, (mid, label, color) in enumerate(ENSEMBLES):
             d = synthetic(lat, lon, i, rng) if args.synthetic else fetch(lat, lon, mid, session)
-            if d and any(v in d and np.isfinite(d[v]).any() for v in ("wind_gusts_10m", "precipitation")):
+            if d and any(v in d and np.isfinite(d[v]).any() for v in ("wind_gusts_10m", "wind_speed_10m", "precipitation")):
                 data.append(((mid, label, color), d)); seen_models.add(label)
         if not data:
             log.warning("%s: no ensemble data", name); continue
