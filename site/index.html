@@ -157,6 +157,25 @@
   @media (prefers-reduced-motion: no-preference) {
     .list button, .ticks button::before { transition: background .12s; }
   }
+
+  /* ---- links menu ---- */
+  .links { position: relative; }
+  .links summary { list-style: none; cursor: pointer; padding: 6px 12px; border-radius: var(--radius); color: var(--muted); font-weight: 500; }
+  .links summary::-webkit-details-marker { display: none; }
+  .links summary:hover, .links[open] summary { background: var(--paper); color: var(--ink); }
+  .links .panel {
+    position: absolute; top: calc(100% + 8px); left: 0; z-index: 50; width: min(900px, 92vw);
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: 0 8px 24px rgba(23,33,43,.12); padding: 16px 18px 12px;
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px 22px;
+  }
+  .links h3 { font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 0 6px; }
+  .links ul { list-style: none; margin: 0; padding: 0; }
+  .links li { margin: 0 0 4px; font-size: 14px; }
+  .links a { color: var(--ink); text-decoration: none; }
+  .links a:hover { color: var(--teal); text-decoration: underline; }
+  .links a small { color: var(--muted); font-size: 12px; margin-left: 4px; }
+  @media (max-width: 860px) { .links .panel { left: auto; right: -60px; grid-template-columns: 1fr 1fr; } }
 </style>
 </head>
 <body>
@@ -167,6 +186,56 @@
     <a href="index.html" class="active">Models</a>
     <a href="tropical.html">Tropical</a>
   </nav>
+  <details class="links">
+    <summary>Links</summary>
+    <div class="panel">
+      <div>
+        <h3>Model sites</h3>
+        <ul>
+          <li><a href="https://www.tropicaltidbits.com/analysis/models/" target="_blank" rel="noopener">Tropical Tidbits</a></li>
+          <li><a href="https://www.weathernerds.org/" target="_blank" rel="noopener">WeatherNerds</a></li>
+          <li><a href="https://www.pivotalweather.com/model.php" target="_blank" rel="noopener">Pivotal Weather</a></li>
+          <li><a href="https://weather.us/model-charts" target="_blank" rel="noopener">weather.us</a></li>
+          <li><a href="https://www.windy.com/" target="_blank" rel="noopener">Windy</a></li>
+          <li><a href="https://mag.ncep.noaa.gov/" target="_blank" rel="noopener">NOAA MAG</a><small>· official NCEP graphics</small></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Tropical</h3>
+        <ul>
+          <li><a href="https://www.nhc.noaa.gov/" target="_blank" rel="noopener">National Hurricane Center</a></li>
+          <li><a href="https://www.nhc.noaa.gov/gtwo.php" target="_blank" rel="noopener">NHC 7-day outlook</a></li>
+          <li><a href="https://www.tropicaltidbits.com/storminfo/" target="_blank" rel="noopener">TT storm info</a><small>· guidance & recon</small></li>
+          <li><a href="https://www.nrlmry.navy.mil/TC.html" target="_blank" rel="noopener">NRL Tropical Cyclones</a></li>
+          <li><a href="https://tropic.ssec.wisc.edu/" target="_blank" rel="noopener">CIMSS Tropical</a><small>· shear, SST, MIMIC</small></li>
+          <li><a href="https://www.nhc.noaa.gov/recon.php" target="_blank" rel="noopener">NHC recon data</a></li>
+          <li><a href="https://www.spaghettimodels.com/" target="_blank" rel="noopener">Mike's Weather Page</a></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Satellite & radar</h3>
+        <ul>
+          <li><a href="https://rammb-slider.cira.colostate.edu/" target="_blank" rel="noopener">RAMMB Slider</a><small>· GOES loops</small></li>
+          <li><a href="https://www.star.nesdis.noaa.gov/GOES/" target="_blank" rel="noopener">NOAA GOES imagery</a></li>
+          <li><a href="https://weather.cod.edu/satrad/" target="_blank" rel="noopener">COD satellite & radar</a></li>
+          <li><a href="https://radar.weather.gov/" target="_blank" rel="noopener">NWS radar</a></li>
+          <li><a href="https://www.ndbc.noaa.gov/" target="_blank" rel="noopener">NDBC buoys</a></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Forecast offices & discussion</h3>
+        <ul>
+          <li><a href="https://www.weather.gov/mfl/" target="_blank" rel="noopener">NWS Miami</a></li>
+          <li><a href="https://www.weather.gov/tbw/" target="_blank" rel="noopener">NWS Tampa Bay</a></li>
+          <li><a href="https://www.weather.gov/key/" target="_blank" rel="noopener">NWS Key West</a></li>
+          <li><a href="https://www.wpc.ncep.noaa.gov/" target="_blank" rel="noopener">Weather Prediction Center</a></li>
+          <li><a href="https://www.spc.noaa.gov/" target="_blank" rel="noopener">Storm Prediction Center</a></li>
+          <li><a href="https://www.floridadisaster.org/" target="_blank" rel="noopener">Florida Disaster</a></li>
+        </ul>
+      </div>
+    </div>
+  </details>
+
   <div class="models" id="modelChips" role="tablist" aria-label="Model"></div>
   <div class="runs">
     <label for="runChips">Run</label>
@@ -226,6 +295,10 @@
 
 <script>
 (() => {
+  // close the Links menu on outside click / Esc
+  document.addEventListener("click", (e) => { const d = document.querySelector(".links[open]"); if (d && !d.contains(e.target)) d.removeAttribute("open"); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") document.querySelectorAll(".links[open]").forEach(d => d.removeAttribute("open")); });
+
   const $ = (id) => document.getElementById(id);
   const BASE = (window.WX_ASSETS || "").replace(/\/?$/, "/").replace(/^\/$/, "");
   // Models come from config.js: window.WX_MODELS = [{id, name, base}, ...]. Each has its own manifest.json.
@@ -302,7 +375,7 @@
     for (const m of SOURCES) {
       const man = S.manifests[m.id];
       const b = document.createElement("button"); b.setAttribute("role", "tab");
-      b.innerHTML = `${m.name || man?.model?.name || m.id}<small>${man?.model?.resolution || ""}</small>`;
+      b.innerHTML = `${m.name || man?.model?.name || m.id}<small>· ${man?.model?.resolution || ""}</small>`;
       b.disabled = !man; b.title = man ? "" : "Not published yet";
       b.onclick = () => setModel(m.id); wrap.appendChild(b);
     }
