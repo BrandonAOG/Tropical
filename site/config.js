@@ -17,5 +17,12 @@ window.WX_ENSEMBLES = [
   { id: "aifsens", name: "ECMWF AIFS ENS (51 members)", base: "https://brandonaog.github.io/wx-ecens/", manifest: "manifest-aifsens.json" },
   { id: "geps",    name: "GEPS (21 members)",           base: "https://brandonaog.github.io/wx-geps/",  manifest: "manifest-geps.json" },
 ];
+// Mesoscale (CONUS) models, all in the wx-meso repo.
+window.WX_MESOSCALE = [
+  { id: "hrrr",    name: "HRRR (3 km, hourly)",        base: "https://brandonaog.github.io/wx-meso/", manifest: "manifest-hrrr.json" },
+  { id: "namnest", name: "NAM 3 km nest",              base: "https://brandonaog.github.io/wx-meso/", manifest: "manifest-namnest.json" },
+  { id: "nam",     name: "NAM 12 km",                  base: "https://brandonaog.github.io/wx-meso/", manifest: "manifest-nam.json" },
+  { id: "nbm",     name: "National Blend (NBM)",       base: "https://brandonaog.github.io/wx-meso/", manifest: "manifest-nbm.json" },
+];
 // Optional single override for everything (e.g. an R2 bucket URL). Leave "".
 window.WX_ASSETS = "";

@@ -852,3 +852,38 @@ def plot_vort_layer(f, meta):
     colorbar(fig, cf, "850–500 mb mean relative vorticity (10⁻⁵ s⁻¹)", ticks=levels[::2])
     title(fig, ax, meta, "850–500 mb layer-mean vorticity, 700 mb wind (kt) & MSLP (mb)")
     return fig
+
+
+# ---------------------------------------------------- mesoscale extras ------
+
+def plot_precip6(f, meta):
+    """6-hr precipitation on its own (models without MSLP, e.g. the National Blend)."""
+    fig, ax = new_map(meta)
+    lon, lat = f.lon, f.lat
+    if "tp_6" in f:
+        cmap, norm, bounds = _precip_cmap()
+        cf = mesh(ax, lon, lat, f["tp_6"] / 25.4, 0.01, cmap=cmap, norm=norm, transform=PC, zorder=2)
+        colorbar(fig, cf, "6-hr precipitation (in)", ticks=bounds)
+    else:
+        ax.text(0.5, 0.5, "Not available at this hour", transform=ax.transAxes, ha="center", fontsize=11, color="#666", zorder=9)
+    mslp_contours(ax, f, lw=0.7)
+    add_basemap(ax)
+    title(fig, ax, meta, "6-hr precipitation (in)")
+    return fig
+
+
+def plot_gust(f, meta):
+    fig, ax = new_map(meta)
+    lon, lat = f.lon, f.lat
+    g = pick(f, "gust") * 1.944
+    bounds = [15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 100]
+    colors = ["#cfe8ff", "#9dcbff", "#5aa7f5", "#2e7ad8", "#2bb673", "#7ed321", "#f8e71c", "#f5a623", "#f05a28", "#d0021b", "#9b0c3d"]
+    cmap = mcolors.ListedColormap(colors); norm = mcolors.BoundaryNorm(bounds, cmap.N)
+    cf = mesh(ax, lon, lat, g, 15, cmap=cmap, norm=norm, transform=PC, zorder=2)
+    if "u10" in f:
+        barbs(ax, lon, lat, pick(f, "u10") * 1.944, pick(f, "v10") * 1.944, color="#333")
+    mslp_contours(ax, f, lw=0.7)
+    add_basemap(ax)
+    colorbar(fig, cf, "10 m wind gust (kt)", ticks=bounds)
+    title(fig, ax, meta, "10 m wind gust (kt)")
+    return fig

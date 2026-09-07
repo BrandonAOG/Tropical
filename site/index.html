@@ -200,6 +200,7 @@
   <nav>
     <a href="index.html" class="active">Models</a>
     <a href="ensembles.html">Ensembles</a>
+    <a href="mesoscale.html">Mesoscale</a>
     <a href="tropical.html">Tropical</a>
     <a href="plumes.html">Plumes</a>
   </nav>
@@ -321,8 +322,8 @@
   const BASE = (window.WX_ASSETS || "").replace(/\/?$/, "/").replace(/^\/$/, "");
   // Models come from config.js: window.WX_MODELS = [{id, name, base}, ...]. Each has its own manifest.json.
   const KIND = document.body.dataset.kind || "models";   // "models" or "ensembles"
-  const SOURCES = KIND === "ensembles"
-    ? (window.WX_ENSEMBLES || [])
+  const SOURCES = KIND === "ensembles" ? (window.WX_ENSEMBLES || [])
+    : KIND === "mesoscale" ? (window.WX_MESOSCALE || [])
     : ((window.WX_MODELS && window.WX_MODELS.length) ? window.WX_MODELS : [{ id: "gfs", name: "GFS", base: "" }]);
   const S = { model: null, manifests: {}, manifest: null, run: null, region: null, param: null, hourIdx: 0, playing: false, timer: null, cache: new Map() };
   const baseOf = (m) => ((m.base || BASE || "")).replace(/\/?$/, "/").replace(/^\/$/, "");
@@ -393,8 +394,8 @@
 
   function buildModelChips() {
     const wrap = $("modelChips"); wrap.innerHTML = "";
-    if (KIND === "ensembles") {
-      const sel = document.createElement("select"); sel.id = "modelSelect"; sel.setAttribute("aria-label", "Ensemble");
+    if (KIND !== "models") {
+      const sel = document.createElement("select"); sel.id = "modelSelect"; sel.setAttribute("aria-label", KIND === "ensembles" ? "Ensemble" : "Model");
       for (const m of SOURCES) {
         const man = S.manifests[m.id];
         const o = document.createElement("option"); o.value = m.id;
@@ -416,7 +417,7 @@
   function setModel(id) {
     const m = SOURCES.find(x => x.id === id && S.manifests[x.id]) || SOURCES.find(x => S.manifests[x.id]);
     S.model = m; S.manifest = S.manifests[m.id];
-    if (KIND === "ensembles") { const sel = $("modelSelect"); if (sel) sel.value = m.id; }
+    if (KIND !== "models") { const sel = $("modelSelect"); if (sel) sel.value = m.id; }
     else [...$("modelChips").children].forEach((b, i) => b.classList.toggle("active", SOURCES[i].id === m.id));
     document.title = `WxModels — ${S.manifest.model.name} ${KIND === "ensembles" ? "ensemble" : "forecast"} maps`;
     const keepRun = S.run && S.manifest.model.runs.find(r => r.id === S.run.id);
@@ -577,7 +578,7 @@
     }));
     buildModelChips();
     if (!Object.keys(S.manifests).length) {
-      showState(KIND === "ensembles" ? "No ensemble runs yet" : "No maps yet", "<br>Nothing has published a run yet. Wait for the scheduled job, or run <code>python render/render.py</code>.");
+      showState(KIND !== "models" ? "No runs published yet" : "No maps yet", "<br>Nothing has published a run yet. Wait for the scheduled job, or run <code>python render/render.py</code>.");
       return;
     }
     const h = readHash();
@@ -587,7 +588,7 @@
     S.region = S.run.regions.includes(h.region) ? h.region : S.run.regions[0];
     S.param = S.run.params.includes(h.param) ? h.param : S.run.params[0];
     S.hourIdx = Math.max(0, hours().indexOf(h.hour));
-    if (KIND === "ensembles") { const sel = $("modelSelect"); if (sel) sel.value = first.id; }
+    if (KIND !== "models") { const sel = $("modelSelect"); if (sel) sel.value = first.id; }
     else [...$("modelChips").children].forEach((b, i) => b.classList.toggle("active", SOURCES[i].id === first.id));
     document.title = `WxModels — ${S.manifest.model.name} ${KIND === "ensembles" ? "ensemble" : "forecast"} maps`;
     buildRunChips(); buildSidebar(); buildTicks(); syncActive(); preload(); setHour(S.hourIdx);

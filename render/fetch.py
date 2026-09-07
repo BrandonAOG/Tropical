@@ -64,7 +64,7 @@ def latest_available_run(now: dt.datetime | None = None,
     """Newest cycle that's actually on the server."""
     now = now or dt.datetime.now(dt.timezone.utc)
     session = session or requests.Session()
-    if MODEL["source"] != "nomads":
+    if MODEL["source"] not in ("nomads", "nomads_grid"):
         # A run is complete when its last step's file exists. Some cycles are
         # published to a shorter range, so probe possible final steps longest-first.
         for cand in _candidate_cycles(now):
@@ -74,7 +74,7 @@ def latest_available_run(now: dt.datetime | None = None,
         if MODEL["source"].startswith("ecmwf"):
             ecmwf_explain(now, session)
         raise RuntimeError(f"No complete {MODEL['name']} run found in the last 48 h")
-    # GFS on NOMADS: usable once hour 240 is on the server (hours to 360 follow ~1 h later)
+    # NOMADS models: usable once the probe hour's index exists
     for cand in _candidate_cycles(now):
         if run_max_hour(cand, session) is not None:
             return cand
@@ -129,6 +129,15 @@ def run_max_hour(run: dt.datetime, session: requests.Session | None = None) -> i
     """Furthest forecast hour available for this run, or None if the run isn't
     complete at any known range. GFS is always the full range."""
     session = session or requests.Session()
+    if MODEL["source"] == "nomads_grid":
+        for last in MODEL.get("probe_max_hours", [MODEL["hours"][-1]]):
+            url = MODEL["idx"].format(ymd=run.strftime("%Y%m%d"), hh=run.strftime("%H"), fhr=last)
+            try:
+                if session.head(url, timeout=20).status_code == 200:
+                    return last
+            except requests.RequestException as e:
+                log.warning("HEAD %s failed: %s", url, e)
+        return None
     if MODEL["source"] == "nomads":
         for last in MODEL.get("probe_max_hours", [MODEL["hours"][-1]]):
             url = NOMADS_IDX.format(ymd=run.strftime("%Y%m%d"), hh=run.strftime("%H")).replace("f000.idx", f"f{last:03d}.idx")
@@ -254,9 +263,21 @@ def download_ecmwf(run: dt.datetime, step: int, pairs: set[tuple], dest: Path, r
     raise RuntimeError(f"Failed to download ECMWF step {step}")
 
 
+def grid_filter_url(run: dt.datetime, fhr: int, pairs) -> str:
+    """grib_filter URL for the CONUS mesoscale models (HRRR/NAM/NBM): whole grid,
+    selected fields only. These grids are Lambert, so no lat/lon subregion."""
+    ymd, hh = run.strftime("%Y%m%d"), run.strftime("%H")
+    q = {"dir": MODEL["dir"].format(ymd=ymd, hh=hh), "file": MODEL["file"].format(ymd=ymd, hh=hh, fhr=fhr)}
+    for var, lev in pairs:
+        q[f"var_{var}"] = "on"; q[f"lev_{lev}"] = "on"
+    return "https://nomads.ncep.noaa.gov/cgi-bin/" + MODEL["filter"] + "?" + urlencode(q, safe="\\()")
+
+
 def build_filter_url(run: dt.datetime, fhr: int, pairs: set[tuple[str, str]],
                      bbox: tuple[float, float, float, float]) -> str:
     """grib_filter URL for one forecast hour, all variables, one bounding box."""
+    if MODEL["source"] == "nomads_grid":
+        return grid_filter_url(run, fhr, pairs)
     lon0, lon1, lat0, lat1 = bbox
     # grib_filter wants 0..360 longitudes
     left = lon0 % 360
@@ -380,6 +401,14 @@ def download_grouped(run: dt.datetime, fhr: int, pairs: set, bbox, dest: Path,
 
 # ------------------------------------------------------------- ECMWF ENS ----
 ECMWF_ENS_FILE = "https://data.ecmwf.int/forecasts/{ymd}/{hh}z/{model}/0p25/enfo/{ymd}{hh}0000-{step}h-enfo-ef.grib2"
+# ECMWF replicates open data to public cloud buckets with the same layout; used when data.ecmwf.int errors
+ECMWF_MIRRORS = ["https://data.ecmwf.int/forecasts/", "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/"]
+
+
+def _mirrored(url: str):
+    """The same path on each mirror, primary first."""
+    for m in ECMWF_MIRRORS:
+        yield url.replace(ECMWF_MIRRORS[0], m)
 
 
 def ecmwf_model_name() -> str:
@@ -389,17 +418,20 @@ def ecmwf_model_name() -> str:
 def _index_select(index_url: str, session, want, retries: int = 3):
     """Parse an ECMWF open-data .index (JSON lines) and return (offset, length)
     for entries matching any of `want` = [(param, levelist or None)]. Logs the
-    parameters present when a wanted one is missing."""
+    parameters present when a wanted one is missing. Falls back to the mirrors."""
     import json as _json
     text = None
     for attempt in range(retries):
-        try:
-            r = session.get(index_url, timeout=120)
-            if r.status_code == 200:
-                text = r.text; break
-            log.info("index %s -> HTTP %s", index_url.rsplit("/", 1)[-1], r.status_code)
-        except requests.RequestException as e:
-            log.info("index fetch failed: %s", str(e)[:80])
+        for url in _mirrored(index_url):
+            try:
+                r = session.get(url, timeout=120)
+                if r.status_code == 200:
+                    text = r.text; break
+                log.info("index %s -> HTTP %s", url.split("/forecasts/")[-1] if "/forecasts/" in url else url.rsplit("/", 1)[-1], r.status_code)
+            except requests.RequestException as e:
+                log.info("index fetch failed: %s", str(e)[:80])
+        if text is not None:
+            break
         time.sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
     if text is None:
         raise RuntimeError(f"index unavailable: {index_url}")
@@ -431,16 +463,20 @@ def _range_download(url: str, ranges, out, session, retries: int = 4):
         else:
             blocks.append([off, off + ln])
     for a, b in blocks:
+        ok = False
         for attempt in range(retries):
-            try:
-                r = session.get(url, headers={"Range": f"bytes={a}-{b - 1}"}, timeout=300)
-                if r.status_code in (200, 206):
-                    out.write(r.content); break
-                log.info("range %s -> HTTP %s", url.rsplit("/", 1)[-1], r.status_code)
-            except requests.RequestException as e:
-                log.info("range fetch failed: %s", str(e)[:80])
+            for u in _mirrored(url):                 # primary, then the cloud mirror
+                try:
+                    r = session.get(u, headers={"Range": f"bytes={a}-{b - 1}"}, timeout=300)
+                    if r.status_code in (200, 206):
+                        out.write(r.content); ok = True; break
+                    log.info("range %s -> HTTP %s", u.rsplit("/", 1)[-1] + (" (mirror)" if "amazonaws" in u else ""), r.status_code)
+                except requests.RequestException as e:
+                    log.info("range fetch failed: %s", str(e)[:80])
+            if ok:
+                break
             time.sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
-        else:
+        if not ok:
             raise RuntimeError(f"range download failed: {url}")
 
 
@@ -480,7 +516,6 @@ def download_ecmwf_ens(run: dt.datetime, step: int, fields, dest: Path, retries:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() and dest.stat().st_size > 1000:
         return dest
-    client = Client(source="ecmwf", model=ecmwf_model_name(), resol="0p25")
     pl, sfc = {}, set()
     for name, lev in fields:
         (pl.setdefault(lev, set()).add(name) if lev is not None else sfc.add(name))
@@ -491,6 +526,8 @@ def download_ecmwf_ens(run: dt.datetime, step: int, fields, dest: Path, retries:
         reqs.append({"stream": "enfo", "type": ["cf", "pf"], "step": step, "levtype": "sfc", "param": sorted(sfc)})
     tmp = dest.with_suffix(".part")
     for attempt in range(retries):
+        source = "ecmwf" if attempt % 2 == 0 else "aws"      # alternate primary / cloud mirror
+        client = Client(source=source, model=ecmwf_model_name(), resol="0p25")
         try:
             with open(tmp, "wb") as out:
                 for req in reqs:
@@ -500,7 +537,7 @@ def download_ecmwf_ens(run: dt.datetime, step: int, fields, dest: Path, retries:
             tmp.rename(dest)
             return dest
         except Exception as e:  # noqa: BLE001
-            log.warning("ECMWF ENS step %d attempt %d failed: %s", step, attempt + 1, str(e)[:120])
+            log.warning("ECMWF ENS step %d attempt %d (%s) failed: %s", step, attempt + 1, source, str(e)[:120])
             time.sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
     raise RuntimeError(f"Failed to download ECMWF ENS step {step}")
 
@@ -627,12 +664,12 @@ CMC_PATTERNS = {
 _CMC_TOKENS: dict | None = None
 
 
-def _listing(session, url, retries: int = 4):
+def _listing(session, url, retries: int = 4, timeout: int = 45):
     """href targets from an Apache-style directory index. The Datamart gets
     slow when many jobs hit it at once, so retry with backoff."""
     for attempt in range(retries):
         try:
-            r = session.get(url, timeout=90)
+            r = session.get(url, timeout=timeout)
             if r.status_code == 200:
                 return [h for h in re.findall(r'href="([^"?][^"]*)"', r.text) if not h.startswith("/")]
             if r.status_code == 404:
@@ -662,15 +699,16 @@ def cmc_tokens(run: dt.datetime, session: requests.Session | None = None) -> dic
         return _CMC_TOKENS
     session = session or requests.Session()
     ymd, hh = run.strftime("%Y%m%d"), run.strftime("%H")
+    # One quick attempt at the listing (to catch renames); the Datamart is often
+    # too busy to answer when 20 jobs start together, and we know the names anyway.
     names = set()
-    for step in (0, 6):
-        for f in _listing(session, CMC_DIR.format(ymd=ymd, hh=hh, fhr=step)):
-            m = re.match(r".*?_MSC_GDPS_(.+)_LatLon0\.15_PT\d{3}H\.grib2$", f)
-            if m:
-                names.add(m.group(1))
+    for f in _listing(session, CMC_DIR.format(ymd=ymd, hh=hh, fhr=6), retries=1, timeout=20):
+        m = re.match(r".*?_MSC_GDPS_(.+)_LatLon0\.15_PT\d{3}H\.grib2$", f)
+        if m:
+            names.add(m.group(1))
     tokens: dict = {}
     if not names:
-        log.warning("CMC: listing unavailable for %s %sZ; using known field names", ymd, hh)
+        log.info("CMC: listing not available quickly; using known field names")
         _CMC_TOKENS = dict(CMC_DEFAULT_TOKENS)
         return _CMC_TOKENS
     for field, pats in CMC_PATTERNS.items():
@@ -742,8 +780,8 @@ def geps_template(run: dt.datetime, session) -> dict:
         return _GEPS_TMPL
     ymd, hh = run.strftime("%Y%m%d"), run.strftime("%H")
     files = []
-    for step in (0, 6, 24):
-        files = [f for f in _listing(session, GEPS_DIR.format(ymd=ymd, hh=hh, fhr=step)) if f.endswith(".grib2")]
+    for step in (6, 24):
+        files = [f for f in _listing(session, GEPS_DIR.format(ymd=ymd, hh=hh, fhr=step), retries=1, timeout=20) if f.endswith(".grib2")]
         if files:
             break
     log.info("GEPS listing sample (%d files): %s", len(files), " ".join(files[:6]))
@@ -895,7 +933,7 @@ def download_files(run: dt.datetime, step: int, pairs: set, dest: Path, session:
         for url in urls:
             for attempt in range(retries):
                 try:
-                    r = session.get(url, timeout=180)
+                    r = session.get(url, timeout=60)
                     if r.status_code == 200 and len(r.content) > 500:
                         data = bz2.decompress(r.content) if url.endswith(".bz2") else r.content
                         out.write(data); got += 1
@@ -940,12 +978,37 @@ class Fields(dict):
 
 # WMO discipline/category/number -> our names, for fields eccodes labels "unknown"
 # (Environment Canada's GRIB uses templates eccodes doesn't always resolve).
-WMO_NAMES = {"d0c1n8": "tp", "d0c7n6": "cape", "d0c1n11": "snod", "d2c0n0": "lsm", "d0c0n17": "skt",
+WMO_NAMES = {"d0c1n8": "tp", "d0c7n6": "cape", "d0c1n11": "snod", "d2c0n0": "lsm", "d0c0n17": "skt", "d0c2n22": "gust",
+             "d0c2n1": "si10", "d0c2n0": "wdir10",
              "d0c3n1": "prmsl", "d0c1n3": "pwat", "d0c0n0": "t", "d0c2n2": "u", "d0c2n3": "v", "d0c3n5": "gh",
              "d0c1n1": "r", "d0c2n10": "absv", "d0c3n0": "pres", "d0c1n7": "prate", "d0c16n196": "refc"}
 
 # Names eccodes gives GFS/ECMWF fields at fixed heights -> the names plots.py uses
-HEIGHT_NAMES = {"2t": "t2m", "10u": "u10", "10v": "v10", "2r": "rh2m", "2d": "d2m", "10si": "si10"}
+HEIGHT_NAMES = {"2t": "t2m", "10u": "u10", "10v": "v10", "2r": "rh2m", "2d": "d2m", "10si": "si10", "10wdir": "wdir10",
+                "gust": "gust", "10fg": "gust", "i10fg": "gust", "si10": "si10", "wdir10": "wdir10", "wdir": "wdir10", "ws": "si10"}
+
+
+_REGRID_CACHE: dict = {}
+
+
+def _regrid_index(lats2d, lons2d, res: float):
+    """Nearest-neighbour mapping from an irregular (e.g. Lambert) grid to a regular
+    lat/lon grid at `res` degrees covering the data. Cached per grid shape."""
+    key = (lats2d.shape, round(float(lats2d[0, 0]), 3), round(float(lons2d[0, 0]), 3), res)
+    if key in _REGRID_CACHE:
+        return _REGRID_CACHE[key]
+    from scipy.spatial import cKDTree
+    lon0, lon1 = float(np.nanmin(lons2d)), float(np.nanmax(lons2d))
+    lat0, lat1 = float(np.nanmin(lats2d)), float(np.nanmax(lats2d))
+    tlon = np.arange(np.floor(lon0), np.ceil(lon1) + res / 2, res)
+    tlat = np.arange(np.ceil(lat1), np.floor(lat0) - res / 2, -res)          # north to south
+    TLON, TLAT = np.meshgrid(tlon, tlat)
+    tree = cKDTree(np.column_stack([lons2d.ravel(), lats2d.ravel()]))
+    dist, idx = tree.query(np.column_stack([TLON.ravel(), TLAT.ravel()]), k=1, distance_upper_bound=res * 2.5)
+    mask = ~np.isfinite(dist)
+    idx = np.where(mask, 0, idx)
+    _REGRID_CACHE[key] = (tlon, tlat, idx, mask, TLON.shape)
+    return _REGRID_CACHE[key]
 
 
 def load_grib(path: Path, tag: str = "") -> Fields:
@@ -965,6 +1028,7 @@ def load_grib(path: Path, tag: str = "") -> Fields:
     import eccodes as ec
     out = Fields()
     lat = lon = None
+    regular = True
     with open(path, "rb") as fh:
         while True:
             h = ec.codes_grib_new_from_file(fh)
@@ -995,19 +1059,26 @@ def load_grib(path: Path, tag: str = "") -> Fields:
                 key += tag
                 ni, nj = ec.codes_get(h, "Ni"), ec.codes_get(h, "Nj")
                 vals = ec.codes_get_values(h).reshape(nj, ni)
+                missing = ec.codes_get(h, "missingValue")
+                vals = np.where(vals == missing, np.nan, vals)
                 if lat is None:
                     lats = ec.codes_get_array(h, "latitudes").reshape(nj, ni)
                     lons = ec.codes_get_array(h, "longitudes").reshape(nj, ni)
-                    lat, lon = lats[:, 0].copy(), lons[0, :].copy()
-                missing = ec.codes_get(h, "missingValue")
-                vals = np.where(vals == missing, np.nan, vals)
+                    lons = np.where(lons > 180, lons - 360, lons)
+                    regular = ec.codes_get(h, "gridType") == "regular_ll"
+                    if regular:
+                        lat, lon = lats[:, 0].copy(), lons[0, :].copy()
+                    else:                                   # Lambert etc.: regrid to lat/lon
+                        tlon, tlat, ridx, rmask, rshape = _regrid_index(lats, lons, MODEL.get("grid_res", 0.05))
+                        lat, lon = tlat, tlon
+                if not regular:
+                    v = vals.ravel()[ridx].reshape(rshape); v[rmask] = np.nan; vals = v
                 if key not in out:                 # first occurrence wins (e.g. duplicate tp records)
                     out[key] = np.asarray(vals, dtype=float)
             finally:
                 ec.codes_release(h)
     if lat is None:
         raise RuntimeError(f"No data in {path}")
-    lon = np.where(lon > 180, lon - 360, lon)
     order = np.argsort(lon)
     lon = lon[order]
     for k in list(out):
@@ -1035,7 +1106,8 @@ def normalise(f: "Fields", fhr: int = 0) -> "Fields":
     src = MODEL["source"]
     accum_from_zero = src in ("ecmwf_opendata", "cmc", "icon", "geps", "ecmwf_ens", "ecmwf_aifs_ens")
     # ---- name aliases (any tag suffix)
-    alias = {"msl": "prmsl", "tcwv": "pwat", "tciwv": "pwat", "tcw": "pwat", "sde": "snod", "z": "gh",
+    alias = {"msl": "prmsl", "mslma": "prmsl", "mslet": "prmsl", "tcwv": "pwat", "tciwv": "pwat", "tcw": "pwat", "sde": "snod", "z": "gh",
+             "gust": "gust", "i10fg": "gust", "10fg": "gust", "si10": "si10", "10si": "si10", "wdir10": "wdir10", "10wdir": "wdir10",
              # DWD local names that eccodes passes through verbatim
              "TQV": "pwat", "T_G": "t_sfc", "CAPE_ML": "cape", "H_SNOW": "snod", "FR_LAND": "lsm", "PMSL": "prmsl",
              "TOT_PREC": "tp", "T_2M": "t2m", "U_10M": "u10", "V_10M": "v10", "RELHUM": "r", "FI": "z"}
@@ -1069,6 +1141,12 @@ def normalise(f: "Fields", fhr: int = 0) -> "Fields":
         if "tp_acc" in f:
             prev = f.get("tp_acc_m6", np.zeros_like(f["tp_acc"]))
             f["tp_6"] = np.clip(f["tp_acc"] - prev, 0, None)
+    # hourly/3-hourly models: 6-h total from the run accumulation and the one 6 h earlier
+    if "tp_6" not in f and "tp_acc" in f and "tp_acc_m6" in f:
+        f["tp_6"] = np.clip(f["tp_acc"] - f["tp_acc_m6"], 0, None)
+    # NBM gives 10 m wind as speed + direction: rebuild components for the barbs
+    if "si10" in f and "wdir10" in f and "u10" not in f:
+        d = np.radians(f["wdir10"]); f["u10"] = -f["si10"] * np.sin(d); f["v10"] = -f["si10"] * np.cos(d)
     # GFS: at f006 the only bucket is 0-6, keyed tp_acc. Same for tagged previous steps.
     for tag in ("", "_m6", "_m12", "_m18"):
         if f"tp_6{tag}" not in f and f"tp_acc{tag}" in f:
@@ -1132,6 +1210,7 @@ def synthetic_fields(fhr: int, bbox, n=(120, 200), tags=("", "_m6", "_m12", "_m1
             "pres_pv": 25000 + 20000 * cold + 15000 * wave, "u_pv": 40 * wave + 30, "v_pv": 20 * np.cos(np.radians(LON * 3 + t * 40)),
             "sbt124": 290 - 70 * np.clip(-wave, 0, 1) ** 2 - 10 * cold, "snod": 0.05 * cold * (1 + t) * np.clip(-wave, 0, 1),
             "t_sfc": 303 - 0.35 * (LAT - 10) + 1.5 * wave, "land": (np.sin(np.radians(LON * 2)) * np.cos(np.radians(LAT * 3)) > 0.4).astype(float),
+            "gust": (8 * wave + 6) * 1.4,
         }
         f["crain"] = ((f["tp_6"] > 0.2) & (f["csnow"] == 0) & (f["cfrzr"] == 0)).astype(float)
         f["tp_acc"] = f["tp_6"] * max(1, (fhr / 6) * 0.6)

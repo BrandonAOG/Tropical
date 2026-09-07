@@ -229,7 +229,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", help="YYYYMMDDHH; default = latest available on NOMADS")
     ap.add_argument("--hours", default=None, help="e.g. 0-120/6 or 0,6,12")
-    ap.add_argument("--regions", nargs="*", default=list(REGIONS))
+    ap.add_argument("--regions", nargs="*", default=MODEL.get("regions", list(REGIONS)))
     ap.add_argument("--params", nargs="*", default=model_params())
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--synthetic", action="store_true", help="fake data, no network")
@@ -266,7 +266,7 @@ def main():
         return
 
     grib_dir = Path(tempfile.mkdtemp(prefix="wx_grib_")) if not args.keep_grib else ROOT / "grib" / run_id
-    pairs = all_fetch_pairs(args.params) if (MODEL["source"] == "nomads" or MODEL["source"] == "gefs") else set()
+    pairs = all_fetch_pairs(args.params) if MODEL["source"] in ("nomads", "nomads_grid", "gefs") else set()
 
     # 1. download (sequential; both servers rate-limit aggressive parallel clients)
     #    GFS: one regional subset per (hour, region) plus small previous-step subsets.
@@ -313,7 +313,29 @@ def main():
             for region in args.regions:
                 grib_paths[(fhr, region)] = files
             continue
-        if MODEL["source"] != "nomads":
+        if MODEL["source"] == "nomads_grid":
+            files = {}
+            dest = grib_dir / f"grid_f{fhr:03d}.grb2"
+            try:
+                download(build_filter_url(run, fhr, pairs, None), dest, session)
+                files[""] = str(dest)
+            except RuntimeError as e:
+                log.error("f%03d: %s", fhr, e); continue
+            for off, spec in prev.items():
+                step = step_for(fhr, off)
+                if step is None or not spec["fetch"]:
+                    continue
+                tag = "_f0" if off == "f0" else f"_m{off}"
+                pdest = grib_dir / f"grid_f{step:03d}{tag}.grb2"
+                try:
+                    download(build_filter_url(run, step, spec["fetch"], None), pdest, session, retries=3)
+                    files[tag] = str(pdest)
+                except RuntimeError as e:
+                    log.warning("%s", e)
+            for region in args.regions:
+                grib_paths[(fhr, region)] = files
+            continue
+        if MODEL["source"] not in ("nomads",):
             fetch = download_ecmwf if MODEL["source"] == "ecmwf_opendata" else \
                     (lambda r, st, prs, d: download_files(r, st, prs, d, session))
             files = {}
