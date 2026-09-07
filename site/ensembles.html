@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WxModels — GFS forecast maps</title>
+<title>WxModels — Ensembles</title>
 <meta name="description" content="GFS model forecast maps, updated every run. Loop through forecast hours by region and parameter.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -184,13 +184,13 @@
   @media (max-width: 860px) { .links .panel { left: auto; right: -60px; grid-template-columns: 1fr 1fr; } }
 </style>
 </head>
-<body>
+<body data-kind="ensembles">
 
 <header>
   <div class="brand">WxModels</div>
   <nav>
-    <a href="index.html" class="active">Models</a>
-    <a href="ensembles.html">Ensembles</a>
+    <a href="index.html">Models</a>
+    <a href="ensembles.html" class="active">Ensembles</a>
     <a href="tropical.html">Tropical</a>
   </nav>
   <details class="links">
