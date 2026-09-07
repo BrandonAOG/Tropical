@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""
+Plumes: every ensemble's spread of wind gusts and rain for a list of cities,
+via Open-Meteo's ensemble API (free for non-commercial use, no key).
+
+    python render/plumes.py             # live
+    python render/plumes.py --synthetic # fake members, for layout work
+
+Output:
+    site/images/plumes/<city>.png
+    site/plumes.json
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import logging
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+import matplotlib  # noqa: E402
+matplotlib.use("Agg")
+import matplotlib.dates as mdates  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+import requests  # noqa: E402
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("plumes")
+
+ROOT = Path(__file__).resolve().parent.parent
+SITE = ROOT / "site"
+OUT = SITE / "images" / "plumes"
+
+API = "https://ensemble-api.open-meteo.com/v1/ensemble"
+DAYS = 10
+
+CITIES = [
+    ("miami",        "Miami",            25.76, -80.19),
+    ("ftlauderdale", "Fort Lauderdale",  26.12, -80.14),
+    ("westpalm",     "West Palm Beach",  26.71, -80.05),
+    ("keywest",      "Key West",         24.56, -81.78),
+    ("naples",       "Naples",           26.14, -81.79),
+    ("capecoral",    "Cape Coral",       26.56, -81.95),
+    ("sarasota",     "Sarasota",         27.34, -82.53),
+    ("tampa",        "Tampa",            27.95, -82.46),
+    ("orlando",      "Orlando",          28.54, -81.38),
+    ("daytona",      "Daytona Beach",    29.21, -81.02),
+    ("jacksonville", "Jacksonville",     30.33, -81.66),
+    ("tallahassee",  "Tallahassee",      30.44, -84.28),
+    ("panamacity",   "Panama City",      30.16, -85.66),
+    ("pensacola",    "Pensacola",        30.42, -87.22),
+]
+
+# Open-Meteo model ids -> display. Requested one at a time so an unknown id
+# (they rename occasionally) only loses that model; the API's error message
+# lists the valid ids and is logged.
+ENSEMBLES = [
+    ("gfs025",                     "GEFS",                 "#d62728"),
+    ("ecmwf_ifs025",               "ECMWF ENS",            "#1f4ed8"),
+    ("ecmwf_aifs025_ensemble",     "ECMWF AIFS ENS",       "#4fa3ff"),
+    ("gem_global",                 "GEPS",                 "#ff7f0e"),
+    ("icon_global",                "ICON EPS",             "#17becf"),
+    ("ukmo_global_ensemble_20km",  "UKMO MOGREPS-G",       "#2ca02c"),
+    ("ncep_aigefs025",             "AI-GEFS",              "#e8590c"),
+    ("google_weathernext2_ensemble", "Google WeatherNext 2", "#00a86b"),
+]
+VARS = ["wind_gusts_10m", "precipitation", "pressure_msl"]
+
+
+def fetch(lat, lon, model, session):
+    """-> {"time": [datetime], var: 2-D array (member, time)} or None"""
+    params = {"latitude": lat, "longitude": lon, "hourly": ",".join(VARS), "models": model,
+              "forecast_days": DAYS, "wind_speed_unit": "kn", "precipitation_unit": "inch", "timezone": "GMT"}
+    try:
+        r = session.get(API, params=params, timeout=60)
+    except requests.RequestException as e:
+        log.warning("%s: %s", model, e); return None
+    if r.status_code != 200:
+        log.warning("%s -> HTTP %s: %s", model, r.status_code, r.text[:300]); return None
+    h = r.json().get("hourly", {})
+    times = [dt.datetime.fromisoformat(t) for t in h.get("time", [])]
+    out = {"time": times}
+    for v in VARS:
+        cols = [k for k in h if k == v or k.startswith(v + "_member")]
+        if not cols:
+            continue
+        arr = np.array([[np.nan if x is None else x for x in h[k]] for k in cols], dtype=float)
+        out[v] = arr
+    return out if any(v in out for v in VARS) else None
+
+
+def synthetic(lat, lon, model_i, rng, n=30):
+    t0 = dt.datetime.now(dt.timezone.utc).replace(minute=0, second=0, microsecond=0, tzinfo=None)
+    times = [t0 + dt.timedelta(hours=i) for i in range(DAYS * 24)]
+    h = np.arange(len(times)); shift = rng.normal() * 8 + model_i * 3; amp = 40 + rng.normal() * 10
+    g = np.array([12 + amp * np.exp(-((h - 110 - shift - rng.normal() * 6) / 20) ** 2) + rng.normal(0, 2, len(h)) for _ in range(n)])
+    p = np.array([np.clip(0.35 * np.exp(-((h - 110 - shift - rng.normal() * 6) / 16) ** 2) + 0.02 * rng.random(len(h)), 0, None) for _ in range(n)])
+    m = np.array([101300 - 3500 * np.exp(-((h - 110 - shift - rng.normal() * 6) / 20) ** 2) + rng.normal(0, 150, len(h)) for _ in range(n)]) / 100
+    return {"time": times, "wind_gusts_10m": g, "precipitation": p, "pressure_msl": m}
+
+
+def six_hourly(times, arr):
+    """Sum hourly precip into 6-h bins ending at each 6th hour."""
+    n = (arr.shape[1] // 6) * 6
+    return [times[i] for i in range(5, n, 6)], arr[:, :n].reshape(arr.shape[0], -1, 6).sum(axis=2)
+
+
+def plot_city(cid, name, lat, lon, data, init, dest: Path):
+    fig = plt.figure(figsize=(14, 10), dpi=100); fig.patch.set_facecolor("#f1f4f7")
+    fig.text(0.04, 0.955, f"Plumes — {name}, FL  ({lat:.2f}°N, {abs(lon):.2f}°W)", fontsize=18, fontweight="bold", color="#17212b")
+    fig.text(0.04, 0.925, f"{len(data)} ensembles · shading = 10th–90th percentile of members · line = ensemble mean · updated {init:%a %d %b %Y %H:%M}Z",
+             fontsize=10.5, color="#5d6c7b")
+    ax_g = fig.add_axes([0.06, 0.53, 0.66, 0.36]); ax_r = fig.add_axes([0.06, 0.09, 0.66, 0.36])
+    rows = []
+    for (mid, label, color), d in data:
+        t = d["time"]
+        if "wind_gusts_10m" in d:
+            g = d["wind_gusts_10m"]
+            ax_g.fill_between(t, np.nanpercentile(g, 10, axis=0), np.nanpercentile(g, 90, axis=0), color=color, alpha=0.10, lw=0)
+            ax_g.plot(t, np.nanmean(g, axis=0), color=color, lw=2, label=f"{label} ({g.shape[0]})")
+            peak = np.nanmax(np.nanmean(g, axis=0)); when = t[int(np.nanargmax(np.nanmean(g, axis=0)))]
+            p64 = 100 * np.nanmean(np.nanmax(g, axis=1) >= 64); p34 = 100 * np.nanmean(np.nanmax(g, axis=1) >= 34)
+            rows.append((label, peak, when, p34, p64, g.shape[0]))
+        if "precipitation" in d:
+            t6, p6 = six_hourly(t, d["precipitation"])
+            ax_r.fill_between(t6, np.nanpercentile(p6, 10, axis=0), np.nanpercentile(p6, 90, axis=0), color=color, alpha=0.10, lw=0)
+            ax_r.plot(t6, np.nanmean(p6, axis=0), color=color, lw=2)
+    top = min(160, max(60, 10 * int(np.ceil((max([r[1] for r in rows] + [40]) * 1.25) / 10))))
+    ax_g.set_ylim(0, top); ax_g.set_ylabel("10 m wind gust (kt)")
+    for y, lab in [(34, "TS"), (64, "Cat 1"), (83, "Cat 2"), (96, "Cat 3"), (113, "Cat 4"), (137, "Cat 5")]:
+        if y < top:
+            ax_g.axhline(y, color="#bbb", lw=0.7, ls=":")
+            ax_g.text(1.0, y, " " + lab, transform=ax_g.get_yaxis_transform(), fontsize=8, color="#888", va="center")
+    ax_g.set_title("Wind gusts", loc="left", fontsize=12, fontweight="bold", color="#17212b")
+    ax_r.set_ylabel("6-hr precipitation (in)"); ax_r.set_title("Rainfall", loc="left", fontsize=12, fontweight="bold", color="#17212b")
+    ax_r.set_ylim(0, None)
+    for ax in (ax_g, ax_r):
+        ax.set_facecolor("white"); ax.spines[["top", "right"]].set_visible(False); ax.grid(axis="x", color="#eee")
+        ax.xaxis.set_major_locator(mdates.DayLocator()); ax.xaxis.set_major_formatter(mdates.DateFormatter("%a\n%d %b"))
+        ax.tick_params(labelsize=8.5)
+    ax_g.legend(loc="upper left", bbox_to_anchor=(1.03, 1.0), frameon=False, fontsize=9.5, title="Ensembles (members)", title_fontsize=10)
+    # summary table
+    tx = fig.add_axes([0.745, 0.09, 0.24, 0.36]); tx.axis("off")
+    tx.text(0, 1, "Peak gust by ensemble", fontsize=12, fontweight="bold", va="top", color="#17212b")
+    for x, h in [(0, "model"), (0.52, "mean peak"), (0.78, "P(≥34)"), (0.92, "P(≥64)")]:
+        tx.text(x, 0.88, h, fontsize=8.5, color="#5d6c7b", va="top")
+    for i, (label, peak, when, p34, p64, n) in enumerate(sorted(rows, key=lambda r: -r[1])):
+        y = 0.79 - i * 0.095
+        tx.text(0, y, label, fontsize=9.5, va="top", color="#17212b")
+        tx.text(0.52, y, f"{peak:.0f} kt", fontsize=9.5, va="top", fontweight="bold", color="#17212b")
+        tx.text(0.78, y, f"{p34:.0f}%", fontsize=9.5, va="top", color="#c81e1e" if p34 >= 50 else "#17212b")
+        tx.text(0.92, y, f"{p64:.0f}%", fontsize=9.5, va="top", color="#c81e1e" if p64 >= 30 else "#17212b")
+        tx.text(0, y - 0.04, f"{when:%a %d %b %HZ}", fontsize=7.5, va="top", color="#8a97a5")
+    fig.text(0.04, 0.03, "WxModels · point forecasts via Open-Meteo (NOAA, ECMWF, ECCC, DWD, UKMO, Google) · model output, not an official forecast · P(≥) = share of members reaching that gust at any time",
+             fontsize=8.5, color="#8a97a5")
+    fig.savefig(dest, facecolor=fig.get_facecolor()); plt.close(fig)
+    return rows
+
+
+def main():
+    ap = argparse.ArgumentParser(); ap.add_argument("--synthetic", action="store_true"); args = ap.parse_args()
+    OUT.mkdir(parents=True, exist_ok=True)
+    session = requests.Session(); session.headers["User-Agent"] = "wxmodels-plumes (github actions)"
+    now = dt.datetime.now(dt.timezone.utc)
+    rng = np.random.default_rng(1)
+    result = {"generated": now.isoformat(), "cities": [], "models": []}
+    seen_models = set()
+    for cid, name, lat, lon in CITIES:
+        data = []
+        for i, (mid, label, color) in enumerate(ENSEMBLES):
+            d = synthetic(lat, lon, i, rng) if args.synthetic else fetch(lat, lon, mid, session)
+            if d:
+                data.append(((mid, label, color), d)); seen_models.add(label)
+        if not data:
+            log.warning("%s: no ensemble data", name); continue
+        rows = plot_city(cid, name, lat, lon, data, now, OUT / f"{cid}.png")
+        best = max(rows, key=lambda r: r[1]) if rows else None
+        result["cities"].append({"id": cid, "name": name, "lat": lat, "lon": lon, "image": f"images/plumes/{cid}.png",
+                                 "peak_kt": round(best[1]) if best else None, "peak_model": best[0] if best else None,
+                                 "peak_time": best[2].isoformat() + "Z" if best else None,
+                                 "p34": round(max(r[3] for r in rows)) if rows else None, "p64": round(max(r[4] for r in rows)) if rows else None})
+        log.info("%s: %d ensembles", name, len(data))
+    result["models"] = sorted(seen_models)
+    (SITE / "plumes.json").write_text(json.dumps(result, indent=1))
+    log.info("done: %d cities", len(result["cities"]))
+
+
+if __name__ == "__main__":
+    main()

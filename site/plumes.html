@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WxModels — Tropical</title>
-<meta name="description" content="Active tropical cyclones with model track guidance (spaghetti plots), intensity forecasts and NHC outlooks.">
+<title>WxModels — Plumes</title>
+<meta name="description" content="Ensemble plumes for Florida cities: wind gust and rainfall spread from GEFS, ECMWF, Google WeatherNext and more.">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
 <link rel="icon" type="image/png" sizes="64x64" href="icons/favicon-64.png">
@@ -100,6 +100,18 @@
   .links a small { color: var(--muted); font-size: 12px; margin-left: 6px; }
   .links li small::before { content: "· "; }
   @media (max-width: 860px) { .links .panel { left: auto; right: -60px; grid-template-columns: 1fr 1fr; } }
+
+  .citybar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .citybar select { height: 38px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); font: inherit; font-weight: 600; padding: 0 10px; min-width: 220px; }
+  .citybar .note { color: var(--muted); font-size: 13px; }
+  .grid { margin-top: 16px; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; text-align: left; cursor: pointer; }
+  .card:hover { background: var(--teal-soft); }
+  .card.active { outline: 2px solid var(--teal); outline-offset: -1px; }
+  .card .n { font-family: "Barlow Condensed", sans-serif; font-weight: 700; font-size: 20px; }
+  .card .s { font-size: 12.5px; color: var(--muted); }
+  .card .s b { color: var(--ink); }
+  .card.hi .s b { color: var(--hu); }
 </style>
 </head>
 <body>
@@ -108,8 +120,8 @@
   <nav>
     <a href="index.html">Models</a>
     <a href="ensembles.html">Ensembles</a>
-    <a href="tropical.html" class="active">Tropical</a>
-    <a href="plumes.html">Plumes</a>
+    <a href="tropical.html">Tropical</a>
+    <a href="plumes.html" class="active">Plumes</a>
   </nav>
   <details class="links">
     <summary>Links</summary>
@@ -166,116 +178,46 @@
 </header>
 
 <main>
-  <div id="stormStrip" class="storms" role="tablist" aria-label="Active storms"></div>
+  <div class="citybar">
+    <select id="city" aria-label="City"></select>
+    <span class="note" id="note"></span>
+  </div>
   <div id="empty" class="empty" hidden></div>
-  <div id="detail" class="detail" hidden></div>
-  <div id="areas" class="areas"></div>
-
-  <section class="outlook">
-    <h3>NHC tropical weather outlooks</h3>
-    <div class="two">
-      <a class="graphic" href="https://www.nhc.noaa.gov/gtwo.php?basin=atlc" target="_blank" rel="noopener">
-        <img src="https://www.nhc.noaa.gov/xgtwo/two_atl_7d0.png" alt="NHC Atlantic 7-day tropical weather outlook" loading="lazy">
-      </a>
-      <a class="graphic" href="https://www.nhc.noaa.gov/gtwo.php?basin=epac" target="_blank" rel="noopener">
-        <img src="https://www.nhc.noaa.gov/xgtwo/two_pac_7d0.png" alt="NHC East Pacific 7-day tropical weather outlook" loading="lazy">
-      </a>
-    </div>
-    <p class="attribution">Track and intensity guidance is drawn from the NHC ATCF a-deck, the same guidance file NHC forecasters use. Model availability varies by storm and cycle; a model shown dashed came from an earlier cycle than the newest one available. This is model output, not a forecast — for official forecasts and warnings see the <a href="https://www.nhc.noaa.gov/">National Hurricane Center</a>.</p>
-  </section>
+  <div class="detail" style="margin-top:14px">
+    <div class="graphic"><img id="img" alt="Ensemble plumes"></div>
+  </div>
+  <div id="grid" class="grid"></div>
+  <p class="attribution">Each chart shows every available ensemble's spread (10th–90th percentile of members) and mean for wind gusts and 6-hour rainfall at that city, out to 10 days. Point forecasts come from <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>, which redistributes NOAA, ECMWF, ECCC, DWD, UK Met Office and Google WeatherNext data. Model output is not an official forecast — see the <a href="https://www.nhc.noaa.gov/">National Hurricane Center</a> and your local NWS office.</p>
 </main>
 
 <script>
 (() => {
-  // close the Links menu on outside click / Esc
   document.addEventListener("click", (e) => { const d = document.querySelector(".links[open]"); if (d && !d.contains(e.target)) d.removeAttribute("open"); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") document.querySelectorAll(".links[open]").forEach(d => d.removeAttribute("open")); });
-
   const $ = (id) => document.getElementById(id);
   const BASE = (window.WX_ASSETS || "").replace(/\/?$/, "/").replace(/^\/$/, "");
   const MONS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const fmt = (iso) => { const d = new Date(iso); return `${String(d.getUTCDate()).padStart(2,"0")} ${MONS[d.getUTCMonth()]} ${String(d.getUTCHours()).padStart(2,"0")}:${String(d.getUTCMinutes()).padStart(2,"0")}Z`; };
-  const cls = (s) => s.invest ? "inv" : /hurricane/i.test(s.classification) ? "hu" : /storm/i.test(s.classification) ? "ts" : "td";
-  const cat = (kt) => kt >= 137 ? "Category 5" : kt >= 113 ? "Category 4" : kt >= 96 ? "Category 3" : kt >= 83 ? "Category 2" : kt >= 64 ? "Category 1" : kt >= 34 ? "Tropical storm" : "Depression";
-  const mph = (kt) => Math.round(kt * 1.15078);
-
-  let data, current;
-
-  function renderStrip() {
-    const strip = $("stormStrip"); strip.innerHTML = "";
-    for (const s of data.storms) {
-      const b = document.createElement("button");
-      b.className = `storm ${cls(s)}`; b.setAttribute("role", "tab");
-      const stats = s.intensity ? `<span><b>${s.intensity} kt</b> · ${mph(s.intensity)} mph</span>${s.pressure ? `<span><b>${s.pressure}</b> mb</span>` : ""}`
-                                : `<span>${(s.models || []).length} models in guidance</span>`;
-      b.innerHTML = `<div class="cls">${s.invest ? "Invest — not yet a depression" : s.classification}</div><div class="name">${s.name}</div><div class="stats">${stats}</div>`;
-      b.onclick = () => select(s.id);
-      strip.appendChild(b);
-    }
+  const fmt = (iso) => { const d = new Date(iso); return `${String(d.getUTCDate()).padStart(2,"0")} ${MONS[d.getUTCMonth()]} ${String(d.getUTCHours()).padStart(2,"0")}Z`; };
+  let data;
+  function show(id) {
+    const c = data.cities.find(x => x.id === id) || data.cities[0];
+    $("city").value = c.id; history.replaceState(null, "", "#" + c.id);
+    $("img").src = BASE + c.image + "?v=" + encodeURIComponent(data.generated);
+    $("img").alt = `Ensemble plumes for ${c.name}`;
+    [...$("grid").children].forEach(el => el.classList.toggle("active", el.dataset.id === c.id));
   }
-
-  function select(id) {
-    current = data.storms.find(s => s.id === id) || data.storms[0];
-    history.replaceState(null, "", "#" + current.id);
-    [...$("stormStrip").children].forEach((b, i) => { const on = data.storms[i].id === current.id; b.classList.toggle("active", on); b.setAttribute("aria-selected", on); });
-    const s = current, d = $("detail"); d.hidden = false;
-    const overview = data.overviews?.[s.basin];
-    d.innerHTML = `
-      <h2>${s.classification} ${s.name} <small>· ${cat(s.intensity)} · ${s.id.toUpperCase()}</small></h2>
-      <div class="meta">
-        <span>Winds <b>${s.intensity} kt / ${mph(s.intensity)} mph</b></span>
-        ${s.pressure ? `<span>Pressure <b>${s.pressure} mb</b></span>` : ""}
-        <span>Moving <b>${s.movement}</b></span>
-        <span>Position <b>${Math.abs(s.lat).toFixed(1)}°${s.lat < 0 ? "S" : "N"} ${Math.abs(s.lon).toFixed(1)}°${s.lon < 0 ? "W" : "E"}</b></span>
-        ${s.advisory ? `<span>Advisory <b>${fmt(s.advisory)}</b></span>` : ""}
-        <a href="${s.nhc_url}" target="_blank" rel="noopener">NHC advisory page</a>
-      </div>
-      ${s.images ? `
-      <div class="chips">
-        ${s.gefs_members ? `<span class="chip ens">GEFS · ${s.gefs_members} members</span>` : ""}
-        ${s.ecens_members ? `<span class="chip ens">ECMWF ens · ${s.ecens_members} members</span>` : ""}
-        ${(s.models || []).map(m => `<span class="chip">${m}</span>`).join("")}
-      </div>
-      <div class="graphic"><img src="${BASE + s.images.track}?v=${encodeURIComponent(data.generated)}" alt="Model track guidance for ${s.name}"></div>
-      <div class="graphic"><img src="${BASE + s.images.intensity}?v=${encodeURIComponent(data.generated)}" alt="Intensity guidance for ${s.name}"></div>`
-      : `<div class="empty"><strong>Model guidance not in yet</strong>Guidance appears once NHC publishes the first a-deck for this system, usually within a few hours of the first advisory.</div>`}
-      ${overview ? `<div class="graphic"><img src="${BASE + overview}?v=${encodeURIComponent(data.generated)}" alt="Basin overview" loading="lazy"></div>` : ""}
-    `;
-  }
-
   async function boot() {
-    try {
-      const r = await fetch(BASE + "tropical.json", { cache: "no-store" });
-      if (!r.ok) throw new Error(r.status);
-      data = await r.json();
-    } catch (e) {
-      $("empty").hidden = false;
-      $("empty").innerHTML = "<strong>Tropical data hasn't been published yet</strong>The renderer writes tropical.json on its next scheduled run.";
-      return;
+    try { const r = await fetch(BASE + "plumes.json", { cache: "no-store" }); if (!r.ok) throw 0; data = await r.json(); }
+    catch (e) { $("empty").hidden = false; $("empty").innerHTML = "<strong>Plumes haven't been published yet</strong>The renderer writes plumes.json on its next scheduled run."; return; }
+    $("note").textContent = `${data.models.length} ensembles · updated ${fmt(data.generated)}`;
+    for (const c of data.cities) { const o = document.createElement("option"); o.value = c.id; o.textContent = c.name; $("city").appendChild(o); }
+    $("city").onchange = (e) => show(e.target.value);
+    for (const c of data.cities) {
+      const b = document.createElement("button"); b.className = "card" + ((c.p64 || 0) >= 30 ? " hi" : ""); b.dataset.id = c.id;
+      b.innerHTML = `<div class="n">${c.name}</div><div class="s">peak <b>${c.peak_kt ?? "—"} kt</b> · P(≥64) <b>${c.p64 ?? "—"}%</b>${c.peak_time ? ` · ${fmt(c.peak_time)}` : ""}</div>`;
+      b.onclick = () => show(c.id); $("grid").appendChild(b);
     }
-    $("updated").textContent = "Updated " + fmt(data.generated);
-    if (!data.storms.length) {
-      $("empty").hidden = false;
-      $("empty").innerHTML = "<strong>No active tropical cyclones or invests</strong>Nothing is currently being tracked by NHC in the Atlantic or Pacific. Check the outlooks below for areas to watch.";
-      renderAreas();
-      const ov = data.overviews?.al;
-      if (ov) $("detail").hidden = false, $("detail").innerHTML = `<div class="graphic"><img src="${BASE + ov}?v=${encodeURIComponent(data.generated)}" alt="Atlantic overview"></div>`;
-      return;
-    }
-    renderStrip();
-    select(location.hash.replace("#", ""));
-    renderAreas();
-  }
-
-  function renderAreas() {
-    const wrap = $("areas"); wrap.innerHTML = "";
-    for (const a of (data.areas || [])) {
-      const p7 = parseInt(a.prob7) || 0, lvl = p7 < 40 ? "lo" : p7 < 60 ? "md" : "hi";
-      const d = document.createElement("div"); d.className = "area";
-      d.innerHTML = `<span>Outlook area · ${a.basin === "al" ? "Atlantic" : "E. Pacific"} · ${Math.abs(a.lat)}°N ${Math.abs(a.lon)}°W</span>
-        <span>2-day <b class="${lvl}">${a.prob2 || "—"}</b></span><span>7-day <b class="${lvl}">${a.prob7 || "—"}</b></span>`;
-      wrap.appendChild(d);
-    }
+    show(location.hash.replace("#", ""));
   }
   boot();
 })();

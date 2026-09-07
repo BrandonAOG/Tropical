@@ -188,7 +188,8 @@
   .links li { margin: 0 0 4px; font-size: 14px; }
   .links a { color: var(--ink); text-decoration: none; }
   .links a:hover { color: var(--teal); text-decoration: underline; }
-  .links a small { color: var(--muted); font-size: 12px; margin-left: 4px; }
+  .links a small { color: var(--muted); font-size: 12px; margin-left: 6px; }
+  .links li small::before { content: "· "; }
   @media (max-width: 860px) { .links .panel { left: auto; right: -60px; grid-template-columns: 1fr 1fr; } }
 </style>
 </head>
@@ -200,6 +201,7 @@
     <a href="index.html" class="active">Models</a>
     <a href="ensembles.html">Ensembles</a>
     <a href="tropical.html">Tropical</a>
+    <a href="plumes.html">Plumes</a>
   </nav>
   <details class="links">
     <summary>Links</summary>
@@ -212,8 +214,8 @@
           <li><a href="https://www.pivotalweather.com/model.php" target="_blank" rel="noopener">Pivotal Weather</a></li>
           <li><a href="https://weather.us/model-charts" target="_blank" rel="noopener">weather.us</a></li>
           <li><a href="https://www.windy.com/" target="_blank" rel="noopener">Windy</a></li>
-          <li><a href="https://earth.nullschool.net/#current/wind/surface/level/orthographic=-75,25,900" target="_blank" rel="noopener">earth.nullschool</a><small>· global wind & ocean</small></li>
-          <li><a href="https://mag.ncep.noaa.gov/" target="_blank" rel="noopener">NOAA MAG</a><small>· official NCEP graphics</small></li>
+          <li><a href="https://earth.nullschool.net/#current/wind/surface/level/orthographic=-75,25,900" target="_blank" rel="noopener">earth.nullschool</a> <small>global wind & ocean</small></li>
+          <li><a href="https://mag.ncep.noaa.gov/" target="_blank" rel="noopener">NOAA MAG</a> <small>official NCEP graphics</small></li>
         </ul>
       </div>
       <div>
@@ -221,9 +223,9 @@
         <ul>
           <li><a href="https://www.nhc.noaa.gov/" target="_blank" rel="noopener">National Hurricane Center</a></li>
           <li><a href="https://www.nhc.noaa.gov/gtwo.php" target="_blank" rel="noopener">NHC 7-day outlook</a></li>
-          <li><a href="https://www.tropicaltidbits.com/storminfo/" target="_blank" rel="noopener">TT storm info</a><small>· guidance & recon</small></li>
+          <li><a href="https://www.tropicaltidbits.com/storminfo/" target="_blank" rel="noopener">TT storm info</a> <small>guidance & recon</small></li>
           <li><a href="https://www.nrlmry.navy.mil/TC.html" target="_blank" rel="noopener">NRL Tropical Cyclones</a></li>
-          <li><a href="https://tropic.ssec.wisc.edu/" target="_blank" rel="noopener">CIMSS Tropical</a><small>· shear, SST, MIMIC</small></li>
+          <li><a href="https://tropic.ssec.wisc.edu/" target="_blank" rel="noopener">CIMSS Tropical</a> <small>shear, SST, MIMIC</small></li>
           <li><a href="https://www.nhc.noaa.gov/recon.php" target="_blank" rel="noopener">NHC recon data</a></li>
           <li><a href="https://www.spaghettimodels.com/" target="_blank" rel="noopener">Mike's Weather Page</a></li>
         </ul>
@@ -231,7 +233,7 @@
       <div>
         <h3>Satellite & radar</h3>
         <ul>
-          <li><a href="https://rammb-slider.cira.colostate.edu/" target="_blank" rel="noopener">RAMMB Slider</a><small>· GOES loops</small></li>
+          <li><a href="https://rammb-slider.cira.colostate.edu/" target="_blank" rel="noopener">RAMMB Slider</a> <small>GOES loops</small></li>
           <li><a href="https://www.star.nesdis.noaa.gov/GOES/" target="_blank" rel="noopener">NOAA GOES imagery</a></li>
           <li><a href="https://weather.cod.edu/satrad/" target="_blank" rel="noopener">COD satellite & radar</a></li>
           <li><a href="https://radar.weather.gov/" target="_blank" rel="noopener">NWS radar</a></li>
