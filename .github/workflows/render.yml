@@ -57,6 +57,9 @@ jobs:
           if [ -n "$RUN" ]; then ARGS="$ARGS --run $RUN"; fi
           python render/render.py $ARGS
 
+      - name: Render tropical page
+        run: python render/tropical.py
+
       - name: Upload site
         uses: actions/upload-pages-artifact@v3
         with:
