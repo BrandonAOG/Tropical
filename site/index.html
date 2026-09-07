@@ -110,6 +110,8 @@
     content: ""; position: absolute; left: 50%; bottom: 8px; width: 2px; height: 10px; background: var(--line); transform: translateX(-50%);
   }
   .ticks button:nth-child(4n+1)::before { height: 16px; background: #b7c2cc; }
+  .ticks.dense button:nth-child(4n+1)::after { display: none; }
+  .ticks.dense button:nth-child(8n+1)::after { display: block; }
   .ticks button:nth-child(4n+1)::after {
     content: attr(data-h); position: absolute; left: 50%; bottom: -4px; transform: translateX(-50%);
     font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums;
@@ -244,7 +246,9 @@
     if (location.hash !== h) history.replaceState(null, "", h);
   }
   const pad = (n) => String(n).padStart(3, "0");
-  const currentHour = () => S.run.hours[S.hourIdx];
+  // Some products are rendered over fewer hours than the run (manifest run.param_hours)
+  const hours = () => (S.run.param_hours && S.run.param_hours[S.param]) || S.run.hours;
+  const currentHour = () => hours()[S.hourIdx];
 
   // ---------- data ----------
   function imgUrl(hour) {
@@ -326,8 +330,8 @@
   }
 
   function buildTicks() {
-    const t = $("ticks"); t.innerHTML = "";
-    S.run.hours.forEach((h, i) => {
+    const t = $("ticks"); t.innerHTML = ""; t.classList.toggle("dense", hours().length > 30);
+    hours().forEach((h, i) => {
       const b = document.createElement("button"); b.dataset.h = pad(h); b.setAttribute("role", "tab");
       b.title = `Hour ${pad(h)}`; b.setAttribute("aria-label", `Forecast hour ${pad(h)}`);
       b.onclick = () => { stop(); setHour(i); };
@@ -346,7 +350,7 @@
   function preload() {
     // Preload every frame for this run/region/param so looping is instant.
     const ticks = $("ticks").children;
-    S.run.hours.forEach((h, i) => {
+    hours().forEach((h, i) => {
       const url = imgUrl(h);
       ticks[i].classList.remove("loaded");
       if (S.cache.get(url) === true) { ticks[i].classList.add("loaded"); return; }
@@ -358,7 +362,7 @@
   }
 
   function setHour(i, peek = false) {
-    S.hourIdx = (i + S.run.hours.length) % S.run.hours.length;
+    S.hourIdx = (i + hours().length) % hours().length;
     const h = currentHour();
     const url = imgUrl(h);
     const img = $("mapImg");
@@ -375,12 +379,18 @@
   }
 
   function setRegion(id) { S.region = id; syncActive(); preload(); setHour(S.hourIdx); }
-  function setParam(id) { S.param = id; syncActive(); preload(); setHour(S.hourIdx); }
+  function setParam(id) {
+    const h = S.run ? currentHour() : 0;
+    S.param = id; syncActive();
+    const hs = hours(); let idx = hs.indexOf(h);
+    if (idx < 0) idx = Math.max(0, hs.findIndex(x => x >= h)); if (idx < 0 || h > hs[hs.length - 1]) idx = hs.length - 1;
+    buildTicks(); preload(); setHour(idx);
+  }
   function setRun(id) {
     S.run = S.manifest.model.runs.find(r => r.id === id) || S.manifest.model.runs[0];
     if (!S.run.regions.includes(S.region)) S.region = S.run.regions[0];
     if (!S.run.params.includes(S.param)) S.param = S.run.params[0];
-    S.hourIdx = Math.min(S.hourIdx, S.run.hours.length - 1);
+    S.hourIdx = Math.min(S.hourIdx, hours().length - 1);
     buildSidebar(); buildTicks(); syncActive(); preload(); setHour(S.hourIdx);
   }
 
@@ -389,7 +399,7 @@
   function play() {
     S.playing = true; $("playIcon").innerHTML = PAUSE; $("play").setAttribute("aria-label", "Pause");
     const tick = () => {
-      const last = S.hourIdx === S.run.hours.length - 1;
+      const last = S.hourIdx === hours().length - 1;
       setHour(S.hourIdx + 1);
       S.timer = setTimeout(tick, last ? +$("speed").value * 2.5 : +$("speed").value); // pause on last frame
     };
@@ -402,7 +412,7 @@
   $("prev").onclick = () => { stop(); setHour(S.hourIdx - 1); };
   $("next").onclick = () => { stop(); setHour(S.hourIdx + 1); };
   $("first").onclick = () => { stop(); setHour(0); };
-  $("last").onclick = () => { stop(); setHour(S.run.hours.length - 1); };
+  $("last").onclick = () => { stop(); setHour(hours().length - 1); };
   $("ticks").onmouseleave = () => { if (!S.playing) setHour(S.hourIdx); };
 
   document.addEventListener("keydown", (e) => {
@@ -412,7 +422,7 @@
       case "ArrowRight": stop(); setHour(S.hourIdx + 1); break;
       case "ArrowLeft":  stop(); setHour(S.hourIdx - 1); break;
       case "Home": stop(); setHour(0); break;
-      case "End":  stop(); setHour(S.run.hours.length - 1); break;
+      case "End":  stop(); setHour(hours().length - 1); break;
       case " ": e.preventDefault(); S.playing ? stop() : play(); break;
       case "ArrowDown": e.preventDefault(); setParam(params[(params.indexOf(S.param) + 1) % params.length]); break;
       case "ArrowUp":   e.preventDefault(); setParam(params[(params.indexOf(S.param) - 1 + params.length) % params.length]); break;
@@ -443,7 +453,7 @@
     S.run = S.manifest.model.runs.find(x => x.id === h.run) || S.manifest.model.runs[0];
     S.region = S.run.regions.includes(h.region) ? h.region : S.run.regions[0];
     S.param = S.run.params.includes(h.param) ? h.param : S.run.params[0];
-    S.hourIdx = Math.max(0, S.run.hours.indexOf(h.hour));
+    S.hourIdx = Math.max(0, hours().indexOf(h.hour));
     [...$("modelChips").children].forEach((b, i) => b.classList.toggle("active", SOURCES[i].id === first.id));
     document.title = `WxModels — ${S.manifest.model.name} forecast maps`;
     buildRunChips(); buildSidebar(); buildTicks(); syncActive(); preload(); setHour(S.hourIdx);
