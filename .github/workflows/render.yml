@@ -2,6 +2,7 @@ name: Render GFS maps and deploy
 
 on:
   schedule:
+    # GFS 00/06/12/18Z runs finish uploading ~3.5–4 h after cycle time.
     - cron: "10 4,10,16,22 * * *"
   workflow_dispatch:
     inputs:
@@ -9,9 +10,8 @@ on:
         description: "Specific run YYYYMMDDHH (blank = latest available)"
         required: false
       hours:
-        description: "Forecast hours, e.g. 0-120/6"
+        description: "Forecast hours, e.g. 0-120/6 (blank = full 360 h)"
         required: false
-        default: "0-120/6"
 
 permissions:
   contents: read
@@ -21,6 +21,9 @@ permissions:
 concurrency:
   group: pages
   cancel-in-progress: false
+
+env:
+  WX_MODEL: gfs
 
 jobs:
   render:
@@ -51,9 +54,10 @@ jobs:
       - name: Render maps
         env:
           RUN: ${{ github.event.inputs.run }}
-          HOURS: ${{ github.event.inputs.hours || '0-120/6' }}
+          HOURS: ${{ github.event.inputs.hours }}
         run: |
-          ARGS="--hours $HOURS --workers 4"
+          ARGS="--workers 4"
+          if [ -n "$HOURS" ]; then ARGS="$ARGS --hours $HOURS"; fi
           if [ -n "$RUN" ]; then ARGS="$ARGS --run $RUN"; fi
           python render/render.py $ARGS
 
