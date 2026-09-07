@@ -15,6 +15,7 @@ window.WX_ENSEMBLES = [
   { id: "aigefs",  name: "AI-GEFS (31 members)",        base: "https://brandonaog.github.io/wx-gefs/",  manifest: "manifest-aigefs.json" },
   { id: "ecens",   name: "ECMWF ENS (51 members)",      base: "https://brandonaog.github.io/wx-ecens/", manifest: "manifest-ecens.json" },
   { id: "aifsens", name: "ECMWF AIFS ENS (51 members)", base: "https://brandonaog.github.io/wx-ecens/", manifest: "manifest-aifsens.json" },
+  { id: "geps",    name: "GEPS (21 members)",           base: "https://brandonaog.github.io/wx-geps/",  manifest: "manifest-geps.json" },
 ];
 // Optional single override for everything (e.g. an R2 bucket URL). Leave "".
 window.WX_ASSETS = "";

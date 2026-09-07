@@ -43,7 +43,7 @@ ENSEMBLE = MODEL.get("kind") == "ensemble"
 if ENSEMBLE:
     import ensemble  # noqa: E402
 from fetch import Fields  # noqa: E402
-from fetch import (all_fetch_pairs, build_filter_url, crop, download, download_ecmwf, download_ecmwf_ens, download_files, download_grouped, ecmwf_pairs, gefs_member_url, load_grib_members, pack_members,
+from fetch import (all_fetch_pairs, build_filter_url, crop, download, download_ecmwf, download_ecmwf_ens, download_files, download_geps, download_grouped, ecmwf_pairs, gefs_member_url, load_grib_members, pack_members,
                    latest_available_run, load_grib, merge, normalise, prev_steps, step_for,
                    synthetic_fields)  # noqa: E402
 
@@ -134,7 +134,7 @@ def render_ensemble_frame(run, fhr, region, param_ids, grib_paths, out_dir, synt
             for k in ("prmsl", "gh500", "t850", "t2m", "u10", "v10", "tp_6"):
                 f[k] = f[k] * (1 + 0.004 * rng.normal() * (1 + fhr / 48)) + (rng.normal() * (150 if k == "prmsl" else 0.4) * (1 + fhr / 48))
             members.append(m); fields.append(f)
-    elif MODEL["source"] in ("ecmwf_ens", "ecmwf_aifs_ens"):
+    elif MODEL["source"] in ("ecmwf_ens", "ecmwf_aifs_ens", "geps"):
         # packed .npz prepared once per hour in the main process (see pack_members)
         try:
             z = np.load(grib_paths["npz"], allow_pickle=False)
@@ -279,11 +279,12 @@ def main():
             for region in args.regions:
                 grib_paths[(fhr, region)] = None
             continue
-        if ENSEMBLE and MODEL["source"] in ("ecmwf_ens", "ecmwf_aifs_ens"):
+        if ENSEMBLE and MODEL["source"] in ("ecmwf_ens", "ecmwf_aifs_ens", "geps"):
             files = {}
+            dl = (lambda r, st, fl, d: download_geps(r, st, fl, d, session)) if MODEL["source"] == "geps" else download_ecmwf_ens
             try:
-                main = download_ecmwf_ens(run, fhr, MODEL["ens_fields"], grib_dir / f"ens_f{fhr:03d}.grib2")
-                prev_f = download_ecmwf_ens(run, fhr - 6, [("tp", None)], grib_dir / f"ens_f{fhr-6:03d}_tp.grib2") if fhr >= 6 else None
+                main = dl(run, fhr, MODEL["ens_fields"], grib_dir / f"ens_f{fhr:03d}.grib2")
+                prev_f = dl(run, fhr - 6, [("tp", None)], grib_dir / f"ens_f{fhr-6:03d}_tp.grib2") if fhr >= 6 else None
                 npz = pack_members(main, prev_f, MODEL["domain"], grib_dir / f"ens_f{fhr:03d}.npz")
                 for pth in (main, prev_f):
                     if pth:

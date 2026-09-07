@@ -81,6 +81,16 @@ MODELS["aifsens"] = dict(MODELS["ecens"], id="aifsens", name="ECMWF AIFS ENS", s
 MODELS["aigefs"] = dict(MODELS["gefs"], id="aigefs", name="AI-GEFS", source="aigefs", credit="NOAA/NCEP AIGEFS via NOMADS",
                         min_age_hours=4.0, hours=list(range(0, 241, 6)))
 
+MODELS["geps"] = {
+    "id": "geps", "name": "GEPS", "resolution": "0.5°", "source": "geps", "kind": "ensemble",
+    "cycles": [0, 12], "min_age_hours": 6.5,
+    "hours": list(range(0, 241, 6)),
+    "members": ["c00"] + [f"p{i:02d}" for i in range(1, 21)],
+    "domain": (-150, -10, 0, 66),
+    "params": None, "credit": "Environment and Climate Change Canada GEPS (MSC Datamart)",
+    "ens_fields": [("msl", None), ("gh", 500), ("t", 850), ("2t", None), ("10u", None), ("10v", None), ("tp", None)],
+}
+
 MODEL = MODELS[os.environ.get("WX_MODEL", "gfs").lower()]
 # Several models can share one Pages site (e.g. two ensembles in one repo): give
 # each its own manifest file name via WX_MANIFEST.

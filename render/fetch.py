@@ -142,6 +142,10 @@ def run_max_hour(run: dt.datetime, session: requests.Session | None = None) -> i
             if cmc_step_complete(run, last, session) and cmc_step_complete(run, last - 6, session):
                 return last
             continue
+        if MODEL["source"] == "geps":
+            if geps_step_complete(run, last, session) and geps_step_complete(run, last - 6, session):
+                return last
+            continue
         url = _probe_url(run, last, session)
         try:
             r = session.get(url, timeout=30, allow_redirects=True, stream=True); r.close()
@@ -667,6 +671,103 @@ def cmc_step_complete(run: dt.datetime, step: int, session, min_files: int = 40)
     return ok
 
 
+# ------------------------------------------------------------- CMC GEPS -----
+# Canadian ensemble on the Datamart: one GRIB2 per field per step holding all
+# 21 members. Directory discovered (25km / 50km) and tokens resolved from the
+# listing exactly like the deterministic GDPS.
+GEPS_ROOT = "https://dd.weather.gc.ca/{ymd}/WXO-DD/model_geps/"
+_GEPS_DIR: str | None = None
+_GEPS_TOKENS: dict | None = None
+
+
+def geps_dir(run: dt.datetime, session) -> str:
+    """Find the resolution folder under model_geps (e.g. 25km) and return the
+    step-directory template .../{hh}/{fhr:03d}/."""
+    global _GEPS_DIR
+    if _GEPS_DIR:
+        return _GEPS_DIR
+    root = GEPS_ROOT.format(ymd=run.strftime("%Y%m%d"))
+    subs = [d for d in _listing(session, root) if d.endswith("/") and not d.startswith(".")]
+    log.info("GEPS folders under %s: %s", root, subs)
+    res = next((d for d in subs if "km" in d), subs[0] if subs else "25km/")
+    _GEPS_DIR = root + res + "{hh}/{fhr:03d}/"
+    return _GEPS_DIR
+
+
+def geps_tokens(run: dt.datetime, session) -> dict:
+    global _GEPS_TOKENS
+    if _GEPS_TOKENS is not None:
+        return _GEPS_TOKENS
+    d = geps_dir(run, session)
+    ymd, hh = run.strftime("%Y%m%d"), run.strftime("%H")
+    names, sample = set(), None
+    for step in (0, 6):
+        for f in _listing(session, d.format(hh=hh, fhr=step)):
+            m = re.match(r".*?_MSC_GEPS_(.+?)_(LatLon[\d.x]+)_PT\d{3}H\.grib2$", f)
+            if m:
+                names.add(m.group(1)); sample = sample or m.group(2)
+    tokens: dict = {}
+    for field, pats in CMC_PATTERNS.items():
+        for pat in pats:
+            probe = pat.format(lev="0500") if "{lev}" in pat else pat
+            hit = next((n for n in sorted(names) if re.fullmatch(probe, n)), None)
+            if hit:
+                tokens[field] = hit.replace("0500", "{lev:04d}") if "{lev}" in pat else hit
+                break
+    if not names:
+        log.warning("GEPS: listing unavailable; using GDPS field names")
+        tokens = dict(CMC_DEFAULT_TOKENS)
+    tokens["_grid"] = sample or "LatLon0.5"
+    log.info("GEPS resolved fields: %s", {k: v for k, v in tokens.items() if not k.startswith("_")})
+    others = sorted(n for n in names if n not in tokens.values())
+    log.info("GEPS other variables (%d): %s", len(others), " ".join(others[:60]))
+    _GEPS_TOKENS = tokens
+    return tokens
+
+
+def download_geps(run: dt.datetime, step: int, fields, dest: Path, session: requests.Session | None = None) -> Path:
+    """Fetch each field's all-member file for one step and concatenate."""
+    session = session or requests.Session()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists() and dest.stat().st_size > 1000:
+        return dest
+    tok = geps_tokens(run, session); d = geps_dir(run, session)
+    ymd, hh = run.strftime("%Y%m%d"), run.strftime("%H")
+    tmp = dest.with_suffix(".part"); got = 0
+    with open(tmp, "wb") as out:
+        for name, lev in fields:
+            if name == "tp" and step == 0:
+                continue
+            t = tok.get(name)
+            if not t:
+                log.warning("GEPS: no token for %s", name); continue
+            token = t.format(lev=int(lev)) if lev is not None else t
+            url = d.format(hh=hh, fhr=step) + f"{ymd}T{hh}Z_MSC_GEPS_{token}_{tok['_grid']}_PT{step:03d}H.grib2"
+            for attempt in range(4):
+                try:
+                    r = session.get(url, timeout=300)
+                    if r.status_code == 200 and len(r.content) > 500:
+                        out.write(r.content); got += 1; break
+                    if r.status_code == 404:
+                        log.warning("missing: %s", url.rsplit("/", 1)[-1]); break
+                except requests.RequestException as e:
+                    log.info("GET failed (%d): %s", attempt + 1, str(e)[:80])
+                time.sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
+    if got == 0:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"No GEPS fields downloaded for step {step}")
+    tmp.rename(dest)
+    return dest
+
+
+def geps_step_complete(run: dt.datetime, step: int, session, min_files: int = 10) -> bool:
+    files = [f for f in _listing(session, geps_dir(run, session).format(hh=run.strftime("%H"), fhr=step)) if f.endswith(".grib2")]
+    ok = len(files) >= min_files and any("MSL" in f for f in files)
+    if not ok:
+        log.info("GEPS step %03d: %d files present, not complete", step, len(files))
+    return ok
+
+
 # ------------------------------------------------------------- DWD ICON -----
 # One bz2-compressed GRIB2 per field per step, on ICON's native triangular
 # grid. Regridded to 0.125° lat-lon with cdo using DWD's own weights file.
@@ -877,7 +978,7 @@ def normalise(f: "Fields", fhr: int = 0) -> "Fields":
     prmsl [Pa], tp_6 [mm/6 h], tp_acc [mm since t0], absv500 [s^-1], pwat [mm],
     t2m, u10, v10, t850 ... GFS is the reference convention."""
     src = MODEL["source"]
-    accum_from_zero = src in ("ecmwf_opendata", "cmc", "icon")
+    accum_from_zero = src in ("ecmwf_opendata", "cmc", "icon", "geps", "ecmwf_ens", "ecmwf_aifs_ens")
     # ---- name aliases (any tag suffix)
     alias = {"msl": "prmsl", "tcwv": "pwat", "tciwv": "pwat", "tcw": "pwat", "sde": "snod", "z": "gh",
              # DWD local names that eccodes passes through verbatim
