@@ -352,6 +352,17 @@ def main():
             except RuntimeError as e:
                 log.error("still failing: %s", e)
 
+    # 1c. warm the basemap cache once here, so worker processes don't race to
+    #     download the same Natural Earth zips and corrupt each other's copies
+    layers = plots._basemap_layers()
+    if len(layers) < 3:
+        log.warning("only %d/3 basemap layers loaded; retrying once", len(layers))
+        plots._BASEMAP = None
+        import shutil as _sh
+        _sh.rmtree(Path.home() / ".local/share/cartopy", ignore_errors=True)
+        layers = plots._basemap_layers()
+    log.info("basemap layers ready: %d/3", len(layers))
+
     # 2. render in parallel
     jobs = [(fhr, region, p) for (fhr, region), p in grib_paths.items()]
     n_done = 0
