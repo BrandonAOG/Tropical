@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WxModels — GFS forecast maps</title>
+<meta name="description" content="GFS model forecast maps, updated every run. Loop through forecast hours by region and parameter.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #f1f4f7;
+    --panel: #ffffff;
+    --ink: #17212b;
+    --muted: #5d6c7b;
+    --line: #d6dde4;
+    --teal: #0e7c86;
+    --teal-soft: #dff2f3;
+    --amber: #b86a00;
+    --amber-soft: #fff1dc;
+    --radius: 6px;
+    --sidebar: 250px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: "Barlow", system-ui, sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+    line-height: 1.4;
+    font-size: 15px;
+  }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+  button:focus-visible, [tabindex]:focus-visible, select:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+
+  /* ---- top bar ---- */
+  header {
+    display: flex; align-items: center; gap: 20px;
+    padding: 10px 18px; background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  .brand { font-family: "Barlow Condensed", sans-serif; font-weight: 700; font-size: 24px; letter-spacing: .01em; }
+  .brand small { font-family: "Barlow", sans-serif; font-weight: 500; font-size: 13px; color: var(--muted); margin-left: 10px; letter-spacing: 0; }
+  .runs { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .runs label { color: var(--muted); font-size: 13px; }
+  .chip {
+    padding: 5px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel);
+    font-size: 13px; font-weight: 500;
+  }
+  .chip.run { background: var(--amber-soft); border-color: #f0d7ad; color: var(--amber); }
+  .chip.run.active { background: var(--amber); color: #fff; border-color: var(--amber); }
+  .updated { color: var(--muted); font-size: 12px; }
+
+  /* ---- layout ---- */
+  main { display: grid; grid-template-columns: var(--sidebar) 1fr; min-height: calc(100% - 52px); }
+  aside {
+    background: var(--panel); border-right: 1px solid var(--line); padding: 16px 12px 24px;
+    overflow-y: auto;
+  }
+  aside h2 { font-size: 12px; font-weight: 600; color: var(--muted); margin: 14px 8px 6px; }
+  aside h2:first-child { margin-top: 0; }
+  #paramGroups { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+  .list button {
+    display: block; width: 100%; text-align: left; padding: 7px 10px; border-radius: var(--radius);
+    font-size: 14.5px; border-left: 3px solid transparent;
+  }
+  .list button:hover { background: var(--paper); }
+  .list button.active { background: var(--teal-soft); border-left-color: var(--teal); font-weight: 600; color: #0a5960; }
+
+  section.viewer { padding: 16px 20px 24px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .frame {
+    position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    overflow: hidden; aspect-ratio: 3 / 2;
+    width: min(100%, calc((100vh - 230px) * 1.5)); margin: 0 auto;
+  }
+  .frame img { width: 100%; height: 100%; display: block; object-fit: contain; background: #fff; }
+  .frame .state {
+    position: absolute; inset: 0; display: none; place-items: center; text-align: center;
+    color: var(--muted); padding: 24px; background: rgba(255,255,255,.92);
+  }
+  .frame .state.show { display: grid; }
+  .frame .state p { max-width: 42ch; margin: 0; }
+  .frame .state strong { display: block; color: var(--ink); font-size: 17px; margin-bottom: 6px; }
+
+  /* ---- transport ---- */
+  .transport {
+    display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: center;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px;
+  }
+  .readout { display: flex; align-items: baseline; gap: 12px; min-width: 240px; }
+  .readout .hour { font-family: "Barlow Condensed", sans-serif; font-weight: 700; font-size: 44px; line-height: 1; color: var(--teal); font-variant-numeric: tabular-nums; }
+  .readout .hour span { font-size: 18px; color: var(--muted); font-weight: 600; margin-right: 2px; }
+  .readout .valid { font-size: 13px; color: var(--muted); line-height: 1.25; }
+  .readout .valid b { display: block; color: var(--ink); font-weight: 600; font-size: 14px; }
+
+  .ticks { display: flex; gap: 3px; align-items: flex-end; height: 34px; }
+  .ticks button {
+    flex: 1; height: 100%; position: relative; border-radius: 3px; min-width: 0;
+  }
+  .ticks button::before {
+    content: ""; position: absolute; left: 50%; bottom: 8px; width: 2px; height: 10px; background: var(--line); transform: translateX(-50%);
+  }
+  .ticks button:nth-child(4n+1)::before { height: 16px; background: #b7c2cc; }
+  .ticks button:nth-child(4n+1)::after {
+    content: attr(data-h); position: absolute; left: 50%; bottom: -4px; transform: translateX(-50%);
+    font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums;
+  }
+  .ticks button:hover::before { background: var(--teal); }
+  .ticks button.active::before { background: var(--teal); height: 22px; width: 4px; border-radius: 2px; }
+  .ticks button.loaded::before { background: #8fb5b9; }
+  .ticks button.active.loaded::before { background: var(--teal); }
+
+  .controls { display: flex; align-items: center; gap: 4px; }
+  .controls button {
+    width: 36px; height: 36px; border-radius: var(--radius); display: grid; place-items: center; border: 1px solid var(--line);
+  }
+  .controls button:hover { background: var(--paper); }
+  .controls button.play { background: var(--teal); color: #fff; border-color: var(--teal); width: 44px; }
+  .controls select {
+    height: 36px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); font: inherit; font-size: 13px; padding: 0 6px; margin-left: 6px;
+  }
+  .controls svg { width: 16px; height: 16px; fill: currentColor; }
+
+  .hint { color: var(--muted); font-size: 12.5px; display: flex; gap: 18px; flex-wrap: wrap; }
+  kbd { font: inherit; font-size: 11.5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--panel); }
+
+  /* ---- mobile ---- */
+  .mobile-selects { display: none; gap: 8px; }
+  .mobile-selects select { flex: 1; min-width: 0; height: 38px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); font: inherit; padding: 0 8px; }
+  @media (max-width: 860px) {
+    main { grid-template-columns: 1fr; }
+    aside { display: none; }
+    .mobile-selects { display: flex; }
+    section.viewer { padding: 12px; }
+    .transport { grid-template-columns: 1fr 1fr; grid-template-rows: auto auto; gap: 12px; }
+    .ticks { grid-column: 1 / -1; }
+    .readout { min-width: 0; }
+    .readout .hour { font-size: 36px; }
+    .controls { justify-content: flex-end; }
+    .hint { display: none; }
+    header { gap: 10px; padding: 10px 12px; }
+    .updated { display: none; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .list button, .ticks button::before { transition: background .12s; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">WxModels <small id="modelName">GFS 0.25°</small></div>
+  <div class="runs">
+    <label for="runChips">Run</label>
+    <div id="runChips" style="display:flex;gap:6px"></div>
+    <span class="updated" id="updated"></span>
+  </div>
+</header>
+
+<main>
+  <aside>
+    <h2>Region</h2>
+    <div class="list" id="regionList"></div>
+    <div id="paramGroups"></div>
+  </aside>
+
+  <section class="viewer">
+    <div class="mobile-selects">
+      <select id="regionSelect" aria-label="Region"></select>
+      <select id="paramSelect" aria-label="Parameter"></select>
+    </div>
+
+    <div class="frame">
+      <img id="mapImg" alt="Forecast map">
+      <div class="state" id="state"><p><strong>Loading manifest</strong></p></div>
+    </div>
+
+    <div class="transport">
+      <div class="readout">
+        <div class="hour"><span>f</span><span id="hourNum">000</span></div>
+        <div class="valid"><b id="validTime">—</b><span id="initTime">—</span></div>
+      </div>
+      <div class="ticks" id="ticks" role="tablist" aria-label="Forecast hours"></div>
+      <div class="controls">
+        <button id="first" title="First frame (Home)" aria-label="First frame"><svg viewBox="0 0 16 16"><path d="M3 2h2v12H3zM13 2v12L6 8z"/></svg></button>
+        <button id="prev" title="Previous (←)" aria-label="Previous frame"><svg viewBox="0 0 16 16"><path d="M11 2v12L4 8z"/></svg></button>
+        <button id="play" class="play" title="Play / pause (space)" aria-label="Play"><svg id="playIcon" viewBox="0 0 16 16"><path d="M4 2l10 6-10 6z"/></svg></button>
+        <button id="next" title="Next (→)" aria-label="Next frame"><svg viewBox="0 0 16 16"><path d="M5 2v12l7-6z"/></svg></button>
+        <button id="last" title="Last frame (End)" aria-label="Last frame"><svg viewBox="0 0 16 16"><path d="M11 2h2v12h-2zM3 2v12l7-6z"/></svg></button>
+        <select id="speed" aria-label="Loop speed">
+          <option value="900">Slow</option>
+          <option value="500" selected>Normal</option>
+          <option value="250">Fast</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="hint">
+      <span><kbd>←</kbd> <kbd>→</kbd> step frames</span>
+      <span><kbd>space</kbd> play / pause</span>
+      <span><kbd>↑</kbd> <kbd>↓</kbd> change parameter</span>
+      <span><kbd>r</kbd> change region</span>
+      <span>Link to this view: the address bar updates as you browse.</span>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const S = { manifest: null, run: null, region: null, param: null, hourIdx: 0, playing: false, timer: null, cache: new Map() };
+
+  // ---------- URL state ----------
+  function readHash() {
+    // #run/region/param/f024
+    const parts = location.hash.replace(/^#/, "").split("/").filter(Boolean);
+    return { run: parts[0], region: parts[1], param: parts[2], hour: parts[3] ? parseInt(parts[3].replace(/^f/, ""), 10) : null };
+  }
+  function writeHash() {
+    const h = `#${S.run.id}/${S.region}/${S.param}/f${pad(currentHour())}`;
+    if (location.hash !== h) history.replaceState(null, "", h);
+  }
+  const pad = (n) => String(n).padStart(3, "0");
+  const currentHour = () => S.run.hours[S.hourIdx];
+
+  // ---------- data ----------
+  function imgUrl(hour) {
+    return S.manifest.path
+      .replace("{model}", S.manifest.model.id).replace("{run}", S.run.id)
+      .replace("{region}", S.region).replace("{param}", S.param).replace("{hour}", pad(hour));
+  }
+  const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"], MONS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const dm = (d) => `${String(d.getUTCDate()).padStart(2,"0")} ${MONS[d.getUTCMonth()]}`;
+  const fmt = (d) => `${DAYS[d.getUTCDay()]} ${dm(d)} ${String(d.getUTCHours()).padStart(2,"0")}Z`;
+
+  // ---------- rendering ----------
+  function showState(title, body) {
+    const el = $("state");
+    if (!title) { el.classList.remove("show"); return; }
+    el.innerHTML = `<p><strong>${title}</strong>${body || ""}</p>`;
+    el.classList.add("show");
+  }
+
+  function buildSidebar() {
+    const m = S.manifest;
+    const rl = $("regionList"), rs = $("regionSelect");
+    rl.innerHTML = ""; rs.innerHTML = "";
+    for (const id of S.run.regions) {
+      const name = m.regions[id]?.name || id;
+      const b = document.createElement("button"); b.textContent = name; b.dataset.id = id;
+      b.onclick = () => setRegion(id); rl.appendChild(b);
+      const o = document.createElement("option"); o.value = id; o.textContent = name; rs.appendChild(o);
+    }
+    const pg = $("paramGroups"), ps = $("paramSelect");
+    pg.innerHTML = ""; ps.innerHTML = "";
+    const groups = {};
+    for (const id of S.run.params) (groups[m.params[id]?.group || "Other"] ||= []).push(id);
+    for (const [g, ids] of Object.entries(groups)) {
+      const h = document.createElement("h2"); h.textContent = g; pg.appendChild(h);
+      const list = document.createElement("div"); list.className = "list"; pg.appendChild(list);
+      const og = document.createElement("optgroup"); og.label = g; ps.appendChild(og);
+      for (const id of ids) {
+        const name = m.params[id]?.name || id;
+        const b = document.createElement("button"); b.textContent = name; b.dataset.id = id;
+        b.onclick = () => setParam(id); list.appendChild(b);
+        const o = document.createElement("option"); o.value = id; o.textContent = name; og.appendChild(o);
+      }
+    }
+    rs.onchange = (e) => setRegion(e.target.value);
+    ps.onchange = (e) => setParam(e.target.value);
+  }
+
+  function buildRunChips() {
+    const wrap = $("runChips"); wrap.innerHTML = "";
+    for (const r of S.manifest.model.runs) {
+      const b = document.createElement("button"); b.className = "chip run";
+      const d = new Date(r.init);
+      b.textContent = `${dm(d)} ${pad(d.getUTCHours()).slice(1)}Z`;
+      b.onclick = () => setRun(r.id); wrap.appendChild(b);
+    }
+    $("updated").textContent = "Updated " + fmt(new Date(S.manifest.generated));
+  }
+
+  function buildTicks() {
+    const t = $("ticks"); t.innerHTML = "";
+    S.run.hours.forEach((h, i) => {
+      const b = document.createElement("button"); b.dataset.h = pad(h); b.setAttribute("role", "tab");
+      b.title = `Hour ${pad(h)}`; b.setAttribute("aria-label", `Forecast hour ${pad(h)}`);
+      b.onclick = () => { stop(); setHour(i); };
+      b.onmouseenter = () => { if (!S.playing) setHour(i, true); };
+      t.appendChild(b);
+    });
+  }
+
+  function syncActive() {
+    document.querySelectorAll("#regionList button").forEach(b => b.classList.toggle("active", b.dataset.id === S.region));
+    document.querySelectorAll("#paramGroups button").forEach(b => b.classList.toggle("active", b.dataset.id === S.param));
+    document.querySelectorAll("#runChips button").forEach((b, i) => b.classList.toggle("active", S.manifest.model.runs[i].id === S.run.id));
+    $("regionSelect").value = S.region; $("paramSelect").value = S.param;
+  }
+
+  function preload() {
+    // Preload every frame for this run/region/param so looping is instant.
+    const ticks = $("ticks").children;
+    S.run.hours.forEach((h, i) => {
+      const url = imgUrl(h);
+      ticks[i].classList.remove("loaded");
+      if (S.cache.get(url) === true) { ticks[i].classList.add("loaded"); return; }
+      const im = new Image();
+      im.onload = () => { S.cache.set(url, true); ticks[i]?.classList.add("loaded"); };
+      im.onerror = () => S.cache.set(url, false);
+      im.src = url;
+    });
+  }
+
+  function setHour(i, peek = false) {
+    S.hourIdx = (i + S.run.hours.length) % S.run.hours.length;
+    const h = currentHour();
+    const url = imgUrl(h);
+    const img = $("mapImg");
+    img.src = url;
+    img.alt = `${S.manifest.model.name} ${S.manifest.params[S.param]?.name || S.param}, ${S.manifest.regions[S.region]?.name || S.region}, forecast hour ${pad(h)}`;
+    img.onerror = () => showState("This frame isn't available", `<br>Hour ${pad(h)} for this parameter hasn't been rendered yet, or the run is still processing.`);
+    img.onload = () => showState(null);
+    $("hourNum").textContent = pad(h);
+    const init = new Date(S.run.init);
+    $("validTime").textContent = "Valid " + fmt(new Date(init.getTime() + h * 3600e3));
+    $("initTime").textContent = "Init " + fmt(init);
+    [...$("ticks").children].forEach((b, k) => { b.classList.toggle("active", k === S.hourIdx); b.setAttribute("aria-selected", k === S.hourIdx); });
+    if (!peek) writeHash();
+  }
+
+  function setRegion(id) { S.region = id; syncActive(); preload(); setHour(S.hourIdx); }
+  function setParam(id) { S.param = id; syncActive(); preload(); setHour(S.hourIdx); }
+  function setRun(id) {
+    S.run = S.manifest.model.runs.find(r => r.id === id) || S.manifest.model.runs[0];
+    if (!S.run.regions.includes(S.region)) S.region = S.run.regions[0];
+    if (!S.run.params.includes(S.param)) S.param = S.run.params[0];
+    S.hourIdx = Math.min(S.hourIdx, S.run.hours.length - 1);
+    buildSidebar(); buildTicks(); syncActive(); preload(); setHour(S.hourIdx);
+  }
+
+  // ---------- playback ----------
+  const PLAY = '<path d="M4 2l10 6-10 6z"/>', PAUSE = '<path d="M3 2h4v12H3zM9 2h4v12H9z"/>';
+  function play() {
+    S.playing = true; $("playIcon").innerHTML = PAUSE; $("play").setAttribute("aria-label", "Pause");
+    const tick = () => {
+      const last = S.hourIdx === S.run.hours.length - 1;
+      setHour(S.hourIdx + 1);
+      S.timer = setTimeout(tick, last ? +$("speed").value * 2.5 : +$("speed").value); // pause on last frame
+    };
+    S.timer = setTimeout(tick, +$("speed").value);
+  }
+  function stop() {
+    S.playing = false; clearTimeout(S.timer); $("playIcon").innerHTML = PLAY; $("play").setAttribute("aria-label", "Play");
+  }
+  $("play").onclick = () => S.playing ? stop() : play();
+  $("prev").onclick = () => { stop(); setHour(S.hourIdx - 1); };
+  $("next").onclick = () => { stop(); setHour(S.hourIdx + 1); };
+  $("first").onclick = () => { stop(); setHour(0); };
+  $("last").onclick = () => { stop(); setHour(S.run.hours.length - 1); };
+  $("ticks").onmouseleave = () => { if (!S.playing) setHour(S.hourIdx); };
+
+  document.addEventListener("keydown", (e) => {
+    if (!S.run || e.target.tagName === "SELECT") return;
+    const params = S.run.params, regions = S.run.regions;
+    switch (e.key) {
+      case "ArrowRight": stop(); setHour(S.hourIdx + 1); break;
+      case "ArrowLeft":  stop(); setHour(S.hourIdx - 1); break;
+      case "Home": stop(); setHour(0); break;
+      case "End":  stop(); setHour(S.run.hours.length - 1); break;
+      case " ": e.preventDefault(); S.playing ? stop() : play(); break;
+      case "ArrowDown": e.preventDefault(); setParam(params[(params.indexOf(S.param) + 1) % params.length]); break;
+      case "ArrowUp":   e.preventDefault(); setParam(params[(params.indexOf(S.param) - 1 + params.length) % params.length]); break;
+      case "r": case "R": setRegion(regions[(regions.indexOf(S.region) + 1) % regions.length]); break;
+      default: return;
+    }
+  });
+
+  // ---------- boot ----------
+  async function boot() {
+    try {
+      const r = await fetch("manifest.json", { cache: "no-store" });
+      if (!r.ok) throw new Error(r.status);
+      S.manifest = await r.json();
+    } catch (e) {
+      showState("No maps yet", "<br>manifest.json wasn't found. Run <code>python render/render.py</code> or wait for the scheduled job to publish the first run.");
+      return;
+    }
+    if (!S.manifest.model?.runs?.length) { showState("No runs published yet", "<br>The renderer hasn't completed a run."); return; }
+    $("modelName").textContent = `${S.manifest.model.name} ${S.manifest.model.resolution}`;
+    document.title = `WxModels — ${S.manifest.model.name} forecast maps`;
+    const h = readHash();
+    S.run = S.manifest.model.runs.find(x => x.id === h.run) || S.manifest.model.runs[0];
+    S.region = S.run.regions.includes(h.region) ? h.region : S.run.regions[0];
+    S.param = S.run.params.includes(h.param) ? h.param : S.run.params[0];
+    S.hourIdx = Math.max(0, S.run.hours.indexOf(h.hour));
+    buildRunChips(); buildSidebar(); buildTicks(); syncActive(); preload(); setHour(S.hourIdx);
+  }
+  boot();
+})();
+</script>
+</body>
+</html>
