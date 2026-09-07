@@ -571,7 +571,7 @@ def load_grib_members(path: Path, tag: str = "", bbox=None) -> dict:
                 if tol == "isobaricInhPa":
                     key = f"{name}{int(lev)}"
                 elif tol in ("heightAboveGround", "heightAboveGroundLayer"):
-                    key = HEIGHT_NAMES.get(name, name)
+                    key = height_key(name, lev)
                 else:
                     key = name
                 if ec.codes_get(h, "stepType") == "accum":
@@ -986,6 +986,21 @@ WMO_NAMES = {"d0c1n8": "tp", "d0c7n6": "cape", "d0c1n11": "snod", "d2c0n0": "lsm
 # Names eccodes gives GFS/ECMWF fields at fixed heights -> the names plots.py uses
 HEIGHT_NAMES = {"2t": "t2m", "10u": "u10", "10v": "v10", "2r": "rh2m", "2d": "d2m", "10si": "si10", "10wdir": "wdir10",
                 "gust": "gust", "10fg": "gust", "i10fg": "gust", "si10": "si10", "wdir10": "wdir10", "wdir": "wdir10", "ws": "si10"}
+# generic names at a fixed height (how unnamed/WMO-mapped fields arrive): (shortName, level) -> key
+HEIGHT_BY_LEVEL = {("u", 10): "u10", ("v", 10): "v10", ("t", 2): "t2m", ("r", 2): "rh2m", ("si", 10): "si10", ("wdir", 10): "wdir10",
+                   ("gust", 10): "gust", ("si10", 10): "si10", ("wdir10", 10): "wdir10"}
+
+
+def height_key(name: str, lev) -> str:
+    try:
+        lv = int(round(float(lev)))
+    except (TypeError, ValueError):
+        lv = None
+    if name in HEIGHT_NAMES:
+        return HEIGHT_NAMES[name]
+    if (name, lv) in HEIGHT_BY_LEVEL:
+        return HEIGHT_BY_LEVEL[(name, lv)]
+    return f"{name}{lv}m" if lv is not None and name in ("u", "v", "t", "r", "q") else name
 
 
 _REGRID_CACHE: dict = {}
@@ -1048,7 +1063,7 @@ def load_grib(path: Path, tag: str = "") -> Fields:
                 elif tol == "potentialVorticity":
                     key = f"{name}_pv"
                 elif tol in ("heightAboveGround", "heightAboveGroundLayer"):
-                    key = HEIGHT_NAMES.get(name, f"{name}{int(lev)}m" if name in ("t", "u", "v", "r", "q") else name)
+                    key = height_key(name, lev)
                 elif tol == "surface" and name in ("t", "u", "v", "q", "r"):
                     key = f"{name}_sfc"
                 else:
