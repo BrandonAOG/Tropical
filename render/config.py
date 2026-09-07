@@ -29,10 +29,11 @@ MODELS = {
         "name": "ECMWF",
         "resolution": "0.25°",
         "source": "ecmwf_opendata",
-        "cycles": [0, 12],             # 06/18 only run to 90 h; skip them for now
-        "min_age_hours": 8,
-        # open data: 3-hourly to 144 h, 6-hourly to 240 h
+        "cycles": [0, 6, 12, 18],      # 06/18 are published with a shorter range; probed at run time
+        "min_age_hours": 7,
+        # open data: 3-hourly to 144 h, 6-hourly to 240 h (00/12); 06/18 stop earlier
         "hours": list(range(0, 241, 6)),
+        "probe_max_hours": [240, 144, 90],
         "params": None,                 # None = every product whose "ecmwf" spec isn't None
         "credit": "ECMWF open data (CC-BY-4.0)",
     },
@@ -178,6 +179,36 @@ PARAMS = {
     "sim_ir": {
         "name": "Simulated IR satellite", "group": "Upper dynamics", "plot": "plot_sim_ir",
         "fetch": _MSLP + [("SBT124", "top_of_atmosphere")], "ecmwf": None, "max_hour": 240,
+    },
+    "shear": {
+        "name": "850–200 mb wind shear", "group": "Tropical", "plot": "plot_shear",
+        "fetch": [("UGRD", "850_mb"), ("VGRD", "850_mb"), ("UGRD", "200_mb"), ("VGRD", "200_mb"), ("HGT", "500_mb")],
+        "ecmwf": [("u", 850), ("v", 850), ("u", 200), ("v", 200), ("gh", 500)],
+    },
+    "steering": {
+        "name": "850–300 mb steering flow", "group": "Tropical", "plot": "plot_steering",
+        "fetch": _MSLP + [("UGRD", "850_mb"), ("VGRD", "850_mb"), ("UGRD", "500_mb"), ("VGRD", "500_mb"), ("UGRD", "300_mb"), ("VGRD", "300_mb")],
+        "ecmwf": _E_MSLP + [("u", 850), ("v", 850), ("u", 500), ("v", 500), ("u", 300), ("v", 300)],
+    },
+    "div200": {
+        "name": "200 mb divergence & wind", "group": "Tropical", "plot": "plot_div200",
+        "fetch": [("UGRD", "200_mb"), ("VGRD", "200_mb"), ("HGT", "200_mb")],
+        "ecmwf": [("u", 200), ("v", 200), ("gh", 200)],
+    },
+    "rh700": {
+        "name": "700 mb relative humidity & wind", "group": "Tropical", "plot": "plot_rh700",
+        "fetch": [("RH", "700_mb"), ("UGRD", "700_mb"), ("VGRD", "700_mb"), ("HGT", "700_mb")],
+        "ecmwf": [("r", 700), ("u", 700), ("v", 700), ("gh", 700)],
+    },
+    "sst": {
+        "name": "Sea surface temperature", "group": "Tropical", "plot": "plot_sst",
+        "fetch": _MSLP + [("TMP", "surface"), ("LAND", "surface")],
+        "ecmwf": _E_MSLP + [("skt", None), ("lsm", None)],
+    },
+    "vort_layer": {
+        "name": "850–500 mb layer vorticity & 700 mb wind", "group": "Tropical", "plot": "plot_vort_layer",
+        "fetch": _MSLP + [("UGRD", "850_mb"), ("VGRD", "850_mb"), ("UGRD", "700_mb"), ("VGRD", "700_mb"), ("UGRD", "500_mb"), ("VGRD", "500_mb")],
+        "ecmwf": _E_MSLP + [("u", 850), ("v", 850), ("u", 700), ("v", 700), ("u", 500), ("v", 500)],
     },
     # ------------------------------------------------------ thermodynamics --
     "t2m": {

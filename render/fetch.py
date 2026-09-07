@@ -59,17 +59,13 @@ def latest_available_run(now: dt.datetime | None = None,
     now = now or dt.datetime.now(dt.timezone.utc)
     session = session or requests.Session()
     if MODEL["source"] == "ecmwf_opendata":
-        # A run is complete when its last step's file exists on the open-data server.
-        last = MODEL["hours"][-1]
+        # A run is complete when its last step's file exists on the open-data
+        # server. 06/18Z runs are published to a shorter range, so probe the
+        # possible final steps from longest to shortest.
         for cand in _candidate_cycles(now):
-            url = ECMWF_FILE.format(ymd=cand.strftime("%Y%m%d"), hh=cand.strftime("%H"), step=last)
-            try:
-                r = session.head(url, timeout=30, allow_redirects=True)
-                if r.status_code == 200:
-                    return cand
-                log.info("ECMWF %s not complete yet (HTTP %s)", cand.strftime("%Y%m%d %HZ"), r.status_code)
-            except requests.RequestException as e:
-                log.warning("HEAD %s failed: %s", url, e)
+            if run_max_hour(cand, session) is not None:
+                return cand
+            log.info("ECMWF %s not complete yet", cand.strftime("%Y%m%d %HZ"))
         raise RuntimeError("No complete ECMWF run found in the last 48 h")
     for cand in _candidate_cycles(now):
         url = NOMADS_IDX.format(ymd=cand.strftime("%Y%m%d"), hh=cand.strftime("%H"))
@@ -79,6 +75,22 @@ def latest_available_run(now: dt.datetime | None = None,
         except requests.RequestException as e:
             log.warning("HEAD %s failed: %s", url, e)
     raise RuntimeError("No GFS run found on NOMADS in the last 48 h")
+
+
+def run_max_hour(run: dt.datetime, session: requests.Session | None = None) -> int | None:
+    """Furthest forecast hour available for this run, or None if the run isn't
+    complete at any known range. GFS is always the full range."""
+    if MODEL["source"] != "ecmwf_opendata":
+        return MODEL["hours"][-1]
+    session = session or requests.Session()
+    for last in MODEL.get("probe_max_hours", [MODEL["hours"][-1]]):
+        url = ECMWF_FILE.format(ymd=run.strftime("%Y%m%d"), hh=run.strftime("%H"), step=last)
+        try:
+            if session.head(url, timeout=30, allow_redirects=True).status_code == 200:
+                return last
+        except requests.RequestException as e:
+            log.warning("HEAD %s failed: %s", url, e)
+    return None
 
 
 def all_fetch_pairs(param_ids: list[str]) -> set[tuple[str, str]]:
@@ -245,6 +257,8 @@ def load_grib(path: Path, tag: str = "") -> Fields:
                     key = f"{name}_pv"
                 elif tol in ("heightAboveGround", "heightAboveGroundLayer"):
                     key = HEIGHT_NAMES.get(name, f"{name}{int(lev)}m" if name in ("t", "u", "v", "r", "q") else name)
+                elif tol == "surface" and name in ("t", "u", "v", "q", "r"):
+                    key = f"{name}_sfc"
                 else:
                     key = name
                 if step_type == "accum":
@@ -347,12 +361,14 @@ def synthetic_fields(fhr: int, bbox, n=(120, 200), tags=("", "_m6", "_m12", "_m1
         cold = np.clip((LAT - 30) / 25, 0, 1)
         f = {
             "gh500": 5700 - 12 * (LAT - 25) + 120 * wave, "gh700": 3000 - 7 * (LAT - 25) + 70 * wave,
-            "gh850": 1500 - 4 * (LAT - 25) + 40 * wave, "gh1000": 100 + 20 * wave, "gh250": 10600 - 22 * (LAT - 25) + 200 * wave,
+            "gh850": 1500 - 4 * (LAT - 25) + 40 * wave, "gh1000": 100 + 20 * wave, "gh250": 10600 - 22 * (LAT - 25) + 200 * wave, "gh200": 12000 - 24 * (LAT - 25) + 220 * wave,
             "absv500": 2e-5 + 1.5e-4 * np.clip(wave, 0, 1) ** 2 * np.sin(np.radians(LON * 6)) ** 2,
             "u500": 25 * wave + 15, "v500": 12 * np.cos(np.radians(LON * 3 + t * 40)),
             "u700": 15 * wave + 8, "v700": 9 * np.cos(np.radians(LON * 3 + t * 40)),
             "u850": 10 * wave + 5, "v850": 8 * np.cos(np.radians(LON * 3 + t * 40)),
             "u250": 45 * wave + 25 + 20 * np.exp(-((LAT - 40) / 6) ** 2), "v250": 20 * np.cos(np.radians(LON * 3 + t * 40)),
+            "u200": 50 * wave + 28 + 22 * np.exp(-((LAT - 40) / 6) ** 2), "v200": 22 * np.cos(np.radians(LON * 3 + t * 40)),
+            "u300": 35 * wave + 20 + 15 * np.exp(-((LAT - 40) / 6) ** 2), "v300": 16 * np.cos(np.radians(LON * 3 + t * 40)),
             "prmsl": 101300 - 1200 * wave + 200 * np.cos(np.radians(LAT * 5)),
             "tp_6": 15 * np.clip(-wave, 0, 1) ** 3 * (rng.random(LON.shape) * 0.5 + 0.5),
             "t850": 293 - 0.5 * (LAT - 10) + 5 * wave, "t700": 283 - 0.5 * (LAT - 10) + 5 * wave,
@@ -364,6 +380,7 @@ def synthetic_fields(fhr: int, bbox, n=(120, 200), tags=("", "_m6", "_m12", "_m1
             "cfrzr": ((cold * np.clip(-wave, 0, 1) > 0.38) & (cold * np.clip(-wave, 0, 1) <= 0.45)).astype(float),
             "pres_pv": 25000 + 20000 * cold + 15000 * wave, "u_pv": 40 * wave + 30, "v_pv": 20 * np.cos(np.radians(LON * 3 + t * 40)),
             "sbt124": 290 - 70 * np.clip(-wave, 0, 1) ** 2 - 10 * cold, "snod": 0.05 * cold * (1 + t) * np.clip(-wave, 0, 1),
+            "t_sfc": 303 - 0.35 * (LAT - 10) + 1.5 * wave, "land": (np.sin(np.radians(LON * 2)) * np.cos(np.radians(LAT * 3)) > 0.4).astype(float),
         }
         f["crain"] = ((f["tp_6"] > 0.2) & (f["csnow"] == 0) & (f["cfrzr"] == 0)).astype(float)
         f["tp_acc"] = f["tp_6"] * max(1, (fhr / 6) * 0.6)
