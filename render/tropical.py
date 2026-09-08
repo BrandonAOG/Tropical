@@ -444,6 +444,29 @@ def fetch_bom_waves(session, out_dir: Path, back_days: int = 30, ahead_days: int
             continue
         misses = 0
         frames.append({"date": d.isoformat(), "images": images})
+    # BoM's RMM charts can't be hot-linked (they block other sites), so copy them too:
+    # the phase-space diagram (last 40 days) and the daily RMM index series (dated; take the newest that exists)
+    try:
+        r = bom.get("https://www.bom.gov.au/clim_data/IDCKGEM000/rmm.phase.Last40days.gif", timeout=30)
+        if r.status_code == 200 and len(r.content) > 5000:
+            (out_dir / "rmm_phase.gif").write_bytes(r.content)
+        else:
+            log.info("BoM RMM phase diagram -> HTTP %s", r.status_code)
+        for k in range(0, 6):
+            d = today - dt.timedelta(days=k)
+            r = bom.get(f"https://www.bom.gov.au/clim_data/IDCK000080/mjo_rmm.daily.{d:%Y%m%d}.png", timeout=30)
+            if r.status_code == 200 and len(r.content) > 5000:
+                (out_dir / "rmm_daily.png").write_bytes(r.content); break
+        # BoM Hovmöllers (OLR and 850 hPa wind anomalies, 15°S–15°N) replace CPC's, whose page image is years stale
+        for name, url in [("hov_olr.png", "https://www.bom.gov.au/clim_data/IDCKGEM000/olr_hovs_183_-15_15.ps.png"),
+                          ("hov_u850.png", "https://www.bom.gov.au/clim_data/IDCKGEM000/winds_hovs_u850_183_-15_15.ps.png")]:
+            r = bom.get(url, timeout=30)
+            if r.status_code == 200 and len(r.content) > 5000:
+                (out_dir / name).write_bytes(r.content)
+            else:
+                log.info("BoM %s -> HTTP %s", name, r.status_code)
+    except requests.RequestException as e:
+        log.info("BoM RMM charts failed: %s", e)
     missing_types = [w for w, _ in BOM_WAVE_TYPES if w not in seen_types]
     log.info("BoM tropical waves: %d frames; types found %s%s; HTTP responses %s", len(frames), sorted(seen_types),
              f"; NOT found (name guess wrong?): {missing_types}" if missing_types else "", statuses)

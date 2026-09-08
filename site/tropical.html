@@ -226,20 +226,24 @@
     <h3>Global tropics &amp; MJO</h3>
     <div class="two">
       <a class="graphic ext" href="https://www.cpc.ncep.noaa.gov/products/precip/CWlink/ghazards/" target="_blank" rel="noopener" title="CPC Global Tropics Hazards Outlook">
-        <img src="https://www.cpc.ncep.noaa.gov/products/precip/CWlink/ghazards/images/gth_full_update.png" alt="CPC Global Tropics Hazards Outlook (weeks 2–3)" loading="lazy">
+        <img src="https://www.cpc.ncep.noaa.gov/products/precip/CWlink/ghaz/gth_full.png" alt="CPC Global Tropics Hazards Outlook (weeks 2–3)" loading="lazy">
         <span class="fallback">CPC Global Tropics Hazards Outlook →</span>
       </a>
-      <a class="graphic ext" href="https://www.bom.gov.au/climate/mjo/" target="_blank" rel="noopener" title="MJO phase (BoM RMM index)">
-        <img src="https://www.bom.gov.au/climate/mjo/graphics/rmm.74toRealtime.png" alt="MJO RMM phase diagram, Bureau of Meteorology" loading="lazy">
+      <a class="graphic ext" href="https://www.bom.gov.au/climate/mjo/" target="_blank" rel="noopener" title="MJO phase, last 40 days (BoM RMM index)">
+        <img class="bomcopy" data-f="rmm_phase.gif" alt="MJO RMM phase-space diagram, last 40 days (Bureau of Meteorology)" loading="lazy">
         <span class="fallback">MJO phase diagram (BoM RMM) →</span>
       </a>
-      <a class="graphic ext" href="https://www.cpc.ncep.noaa.gov/products/precip/CWlink/MJO/mjo.shtml" target="_blank" rel="noopener" title="CPC MJO forecasts">
-        <img src="https://www.cpc.ncep.noaa.gov/products/precip/CWlink/MJO/CLIVAR/mjo_ensemble_forecast.gif" alt="CPC ensemble MJO phase forecast" loading="lazy">
-        <span class="fallback">CPC MJO ensemble forecasts →</span>
+      <a class="graphic ext" href="https://www.bom.gov.au/climate/mjo/" target="_blank" rel="noopener" title="Daily RMM index (BoM)">
+        <img class="bomcopy" data-f="rmm_daily.png" alt="Daily RMM1/RMM2 MJO index series (Bureau of Meteorology)" loading="lazy">
+        <span class="fallback">Daily RMM index (BoM) →</span>
       </a>
-      <a class="graphic ext" href="https://www.cpc.ncep.noaa.gov/products/precip/CWlink/MJO/mjo.shtml" target="_blank" rel="noopener" title="CPC velocity potential / MJO Hovmöller">
-        <img src="https://www.cpc.ncep.noaa.gov/products/precip/CWlink/MJO/CLIVAR/chi200_full.gif" alt="CPC 200 hPa velocity potential anomalies (MJO)" loading="lazy">
-        <span class="fallback">CPC 200 hPa velocity potential →</span>
+      <a class="graphic ext" href="https://www.bom.gov.au/climate/mjo/" target="_blank" rel="noopener" title="OLR anomalies, 15°S–15°N (BoM)">
+        <img class="bomcopy" data-f="hov_olr.png" alt="Time–longitude section of OLR anomalies, 15°S–15°N (Bureau of Meteorology)" loading="lazy">
+        <span class="fallback">OLR Hovmöller (BoM) →</span>
+      </a>
+      <a class="graphic ext" href="https://www.bom.gov.au/climate/mjo/" target="_blank" rel="noopener" title="850 hPa wind anomalies, 15°S–15°N (BoM)">
+        <img class="bomcopy" data-f="hov_u850.png" alt="Time–longitude section of 850 hPa zonal wind anomalies (Bureau of Meteorology)" loading="lazy">
+        <span class="fallback">850 hPa wind Hovmöller (BoM) →</span>
       </a>
     </div>
     <div id="waves" class="waves" hidden>
@@ -257,7 +261,7 @@
         </div>
       </div>
     </div>
-    <p class="attribution">The Global Tropics Hazards Outlook is CPC's week 2–3 view of where tropical cyclone formation and heavy rain are favoured. The MJO diagrams show which phase the Madden–Julian Oscillation is in and where it's heading — phases 1–2 (and 8) tend to favour Atlantic development, 4–6 suppress it. All images are served live from NOAA CPC and the Australian Bureau of Meteorology.</p>
+    <p class="attribution">The Global Tropics Hazards Outlook is CPC's week 2–3 view of where tropical cyclone formation and heavy rain are favoured. The MJO diagrams show which phase the Madden–Julian Oscillation is in and where it's heading — phases 1–2 (and 8) tend to favour Atlantic development, 4–6 suppress it. The hazards map is served live from NOAA CPC; the MJO charts and wave frames are copied from the Australian Bureau of Meteorology (CC BY) each cycle.</p>
     <p class="attribution">Track and intensity guidance is drawn from the NHC ATCF a-deck, the same guidance file NHC forecasters use. Model availability varies by storm and cycle; a model shown dashed came from an earlier cycle than the newest one available. This is model output, not a forecast — for official forecasts and warnings see the <a href="https://www.nhc.noaa.gov/">National Hurricane Center</a>.</p>
   </section>
 </main>
@@ -376,6 +380,7 @@
       return;
     }
     $("updated").textContent = "Updated " + fmt(data.generated);
+    document.querySelectorAll("img.bomcopy").forEach(im => im.src = BASE + "images/mjo/" + im.dataset.f + "?v=" + encodeURIComponent(data.generated));
     if (!data.storms.length) {
       $("empty").hidden = false;
       $("empty").innerHTML = "<strong>No active tropical cyclones or invests</strong>Nothing is currently being tracked by NHC in the Atlantic or Pacific. Check the outlooks below for areas to watch.";
