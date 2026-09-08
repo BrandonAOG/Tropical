@@ -16,6 +16,10 @@ on:
       hours:
         description: "Forecast hours, e.g. 0-120/6 (blank = model's full range)"
         required: false
+      site_only:
+        description: "Deploy site changes only: reuse the live images, refresh tropical/plumes, no GFS render"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -59,7 +63,7 @@ jobs:
 
   render:
     needs: check
-    if: needs.check.outputs.needs_render == 'true'
+    if: needs.check.outputs.needs_render == 'true' && github.event.inputs.site_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -94,7 +98,7 @@ jobs:
   assemble:
     needs: [check, render]
     # run even if some slices failed: the manifest only lists hours that have images
-    if: always() && needs.check.outputs.needs_render == 'true' && needs.render.result != 'cancelled'
+    if: always() && (needs.check.outputs.needs_render == 'true' || github.event.inputs.site_only == 'true') && needs.render.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -114,13 +118,18 @@ jobs:
           path: ~/.local/share/cartopy
           key: natural-earth-50m-v1
       - name: Collect rendered slices
+        if: github.event.inputs.site_only != 'true'
         uses: actions/download-artifact@v4
         with:
           pattern: images-*
           path: site/images
           merge-multiple: true
         continue-on-error: true
+      - name: Restore live images (site-only deploy)
+        if: github.event.inputs.site_only == 'true'
+        run: python render/restore_live.py
       - name: Write manifest
+        if: github.event.inputs.site_only != 'true'
         env:
           HOURS: ${{ github.event.inputs.hours }}
         run: |
