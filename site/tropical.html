@@ -379,7 +379,10 @@
     pb.addEventListener("error", () => { if (++tries <= 3) { d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1)); setMonth(d); } });
   })();
   // external agency images sometimes move: show a link instead of a broken picture
-  document.querySelectorAll(".graphic.ext img").forEach(img => img.addEventListener("error", () => img.closest(".graphic").classList.add("broken")));
+  document.querySelectorAll(".graphic.ext img").forEach(img => {
+    img.addEventListener("error", () => img.closest(".graphic").classList.add("broken"));
+    img.addEventListener("load", () => img.closest(".graphic").classList.remove("broken"));   // a retried address that works un-breaks it
+  });
 
   function wavesPlayer(frames) {
     if (!frames || !frames.length) return;
