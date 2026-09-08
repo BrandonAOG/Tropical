@@ -71,6 +71,9 @@
   .area b { font-family: "Barlow Condensed", sans-serif; font-size: 20px; font-weight: 700; }
   .area .lo { color: #b58f00; } .area .md { color: #e07b00; } .area .hi { color: var(--hu); }
   section.outlook { margin-top: 30px; }
+  .graphic.ext { position: relative; min-height: 60px; display: block; }
+  .graphic.ext .fallback { display: none; padding: 18px; color: var(--teal); font-weight: 600; }
+  .graphic.ext.broken img { display: none; } .graphic.ext.broken .fallback { display: block; }
   section.outlook h3 { font-size: 15px; font-weight: 600; margin: 0 0 8px; color: var(--muted); }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   .attribution { margin-top: 22px; color: var(--muted); font-size: 12.5px; max-width: 70ch; }
@@ -198,6 +201,29 @@
         <img src="https://www.nhc.noaa.gov/xgtwo/two_pac_7d0.png" alt="NHC East Pacific 7-day tropical weather outlook" loading="lazy">
       </a>
     </div>
+  </section>
+
+  <section class="outlook">
+    <h3>Global tropics &amp; MJO</h3>
+    <div class="two">
+      <a class="graphic ext" href="https://www.cpc.ncep.noaa.gov/products/precip/CWlink/ghazards/" target="_blank" rel="noopener" title="CPC Global Tropics Hazards Outlook">
+        <img src="https://www.cpc.ncep.noaa.gov/products/precip/CWlink/ghazards/images/gth_full_update.png" alt="CPC Global Tropics Hazards Outlook (weeks 2–3)" loading="lazy">
+        <span class="fallback">CPC Global Tropics Hazards Outlook →</span>
+      </a>
+      <a class="graphic ext" href="http://www.bom.gov.au/climate/mjo/" target="_blank" rel="noopener" title="MJO phase (BoM RMM index)">
+        <img src="http://www.bom.gov.au/climate/mjo/graphics/rmm.74toRealtime.png" alt="MJO RMM phase diagram, Bureau of Meteorology" loading="lazy">
+        <span class="fallback">MJO phase diagram (BoM RMM) →</span>
+      </a>
+      <a class="graphic ext" href="https://www.cpc.ncep.noaa.gov/products/precip/CWlink/MJO/mjo.shtml" target="_blank" rel="noopener" title="CPC MJO forecasts">
+        <img src="https://www.cpc.ncep.noaa.gov/products/precip/CWlink/MJO/CLIVAR/mjo_ensemble_forecast.gif" alt="CPC ensemble MJO phase forecast" loading="lazy">
+        <span class="fallback">CPC MJO ensemble forecasts →</span>
+      </a>
+      <a class="graphic ext" href="https://www.cpc.ncep.noaa.gov/products/precip/CWlink/MJO/mjo.shtml" target="_blank" rel="noopener" title="CPC velocity potential / MJO Hovmöller">
+        <img src="https://www.cpc.ncep.noaa.gov/products/precip/CWlink/MJO/CLIVAR/chi200_full.gif" alt="CPC 200 hPa velocity potential anomalies (MJO)" loading="lazy">
+        <span class="fallback">CPC 200 hPa velocity potential →</span>
+      </a>
+    </div>
+    <p class="attribution">The Global Tropics Hazards Outlook is CPC's week 2–3 view of where tropical cyclone formation and heavy rain are favoured. The MJO diagrams show which phase the Madden–Julian Oscillation is in and where it's heading — phases 1–2 (and 8) tend to favour Atlantic development, 4–6 suppress it. All images are served live from NOAA CPC and the Australian Bureau of Meteorology.</p>
     <p class="attribution">Track and intensity guidance is drawn from the NHC ATCF a-deck, the same guidance file NHC forecasters use. Model availability varies by storm and cycle; a model shown dashed came from an earlier cycle than the newest one available. This is model output, not a forecast — for official forecasts and warnings see the <a href="https://www.nhc.noaa.gov/">National Hurricane Center</a>.</p>
   </section>
 </main>
@@ -262,6 +288,9 @@
       ${overview ? `<div class="graphic"><img src="${BASE + overview}?v=${encodeURIComponent(data.generated)}" alt="Basin overview" loading="lazy"></div>` : ""}
     `;
   }
+
+  // external agency images sometimes move: show a link instead of a broken picture
+  document.querySelectorAll(".graphic.ext img").forEach(img => img.addEventListener("error", () => img.closest(".graphic").classList.add("broken")));
 
   async function boot() {
     try {
