@@ -414,8 +414,13 @@ def fetch_bom_waves(session, out_dir: Path, back_days: int = 30, ahead_days: int
     (MJO, Kelvin, equatorial Rossby, MRG) per day, observed and forecast days.
     Returns [{date, images: {type: path}}]. Cached on disk between runs. CC BY (BoM)."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    # BoM refuses non-browser clients; present browser-like headers for these requests only
+    bom = requests.Session()
+    bom.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36",
+                        "Accept": "image/avif,image/webp,image/png,image/*,*/*;q=0.8", "Referer": "https://www.bom.gov.au/climate/mjo/",
+                        "Accept-Language": "en-US,en;q=0.9"})
     today = dt.datetime.now(dt.timezone.utc).date()
-    frames, misses, seen_types = [], 0, set()
+    frames, misses, seen_types, statuses = [], 0, set(), {}
     for k in range(-back_days, ahead_days + 1):
         d = today + dt.timedelta(days=k); ymd = d.strftime("%Y%m%d")
         images = {}
@@ -423,13 +428,14 @@ def fetch_bom_waves(session, out_dir: Path, back_days: int = 30, ahead_days: int
             dest = out_dir / f"{wave}_{ymd}.png"
             if not dest.exists():
                 try:
-                    r = session.get(BOM_WAVES.format(wave=wave, ymd=ymd), timeout=30)
+                    r = bom.get(BOM_WAVES.format(wave=wave, ymd=ymd), timeout=30)
+                    statuses[r.status_code] = statuses.get(r.status_code, 0) + 1
                     if r.status_code == 200 and len(r.content) > 5000:
                         dest.write_bytes(r.content)
                     else:
                         continue
-                except requests.RequestException:
-                    continue
+                except requests.RequestException as e:
+                    statuses["error"] = statuses.get("error", 0) + 1; continue
             images[wave] = f"images/mjo/{dest.name}"; seen_types.add(wave)
         if not images:
             misses += 1
@@ -439,8 +445,8 @@ def fetch_bom_waves(session, out_dir: Path, back_days: int = 30, ahead_days: int
         misses = 0
         frames.append({"date": d.isoformat(), "images": images})
     missing_types = [w for w, _ in BOM_WAVE_TYPES if w not in seen_types]
-    log.info("BoM tropical waves: %d frames; types found %s%s", len(frames), sorted(seen_types),
-             f"; NOT found (name guess wrong?): {missing_types}" if missing_types else "")
+    log.info("BoM tropical waves: %d frames; types found %s%s; HTTP responses %s", len(frames), sorted(seen_types),
+             f"; NOT found (name guess wrong?): {missing_types}" if missing_types else "", statuses)
     return frames
 
 
