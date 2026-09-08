@@ -70,6 +70,17 @@
   .area { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 12px; font-size: 13.5px; display: flex; gap: 12px; align-items: baseline; }
   .area b { font-family: "Barlow Condensed", sans-serif; font-size: 20px; font-weight: 700; }
   .area .lo { color: #b58f00; } .area .md { color: #e07b00; } .area .hi { color: var(--hu); }
+  .recon { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; display: grid; gap: 8px; }
+  .recon h3 { margin: 0; font-size: 14px; color: var(--muted); font-weight: 600; }
+  .recon .last { display: flex; gap: 22px; flex-wrap: wrap; font-size: 14px; }
+  .recon .last b { font-family: "Barlow Condensed", sans-serif; font-size: 22px; font-weight: 700; margin-right: 4px; }
+  .recon table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .recon th, .recon td { text-align: left; padding: 4px 8px; border-top: 1px solid var(--line); }
+  .recon th { color: var(--muted); font-weight: 600; border-top: 0; }
+  .recon tr.air td { color: var(--hu); font-weight: 600; }
+  details.text { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+  details.text summary { padding: 10px 14px; cursor: pointer; font-weight: 600; }
+  details.text pre { margin: 0; padding: 0 16px 16px; white-space: pre-wrap; font: 13px/1.45 ui-monospace, Menlo, Consolas, monospace; color: #223; max-height: 60vh; overflow: auto; }
   section.outlook { margin-top: 30px; }
   .waves { margin-top: 16px; display: grid; gap: 10px; }
   .waves h3 { margin: 0; }
@@ -294,6 +305,20 @@
   const mph = (kt) => Math.round(kt * 1.15078);
 
   let data, current;
+  const esc = (t) => t.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  const pos = (la, lo) => `${Math.abs(la).toFixed(2)}°${la < 0 ? "S" : "N"} ${Math.abs(lo).toFixed(2)}°${lo < 0 ? "W" : "E"}`;
+  function reconHtml(s) {
+    if (!s.recent_fixes || !s.recent_fixes.length) return "";
+    const a = s.last_aircraft_fix;
+    const age = (iso) => { const h = (Date.now() - new Date(iso)) / 36e5; return h < 1 ? `${Math.round(h * 60)} min ago` : `${h.toFixed(1)} h ago`; };
+    const rows = s.recent_fixes.map(f => `<tr class="${f.kind === "aircraft" ? "air" : ""}"><td>${fmt(f.time)}</td><td>${f.kind}</td><td>${pos(f.lat, f.lon)}</td><td>${f.vmax != null ? f.vmax + " kt" : "—"}</td><td>${f.mslp != null ? f.mslp + " mb" : "—"}</td></tr>`).join("");
+    return `<div class="recon">
+      <h3>Fixes — recon &amp; satellite (NHC f-deck)</h3>
+      ${a ? `<div class="last"><span><b>${a.mslp != null ? a.mslp : "—"}</b>mb · last aircraft fix</span><span><b>${a.vmax != null ? a.vmax : "—"}</b>kt</span><span>${pos(a.lat, a.lon)}</span><span>${fmt(a.time)} · ${age(a.time)}</span></div>`
+          : `<div class="last"><span>No aircraft fixes yet — latest fix is ${s.last_fix.kind}, ${fmt(s.last_fix.time)}</span></div>`}
+      <table><tr><th>Time</th><th>Type</th><th>Position</th><th>Wind</th><th>Pressure</th></tr>${rows}</table>
+    </div>`;
+  }
 
   function renderStrip() {
     const strip = $("stormStrip"); strip.innerHTML = "";
@@ -333,6 +358,9 @@
       <div class="graphic"><img src="${BASE + s.images.track}?v=${encodeURIComponent(data.generated)}" alt="Model track guidance for ${s.name}"></div>
       <div class="graphic"><img src="${BASE + s.images.intensity}?v=${encodeURIComponent(data.generated)}" alt="Intensity guidance for ${s.name}"></div>`
       : `<div class="empty"><strong>Model guidance not in yet</strong>Guidance appears once NHC publishes the first a-deck for this system, usually within a few hours of the first advisory.</div>`}
+      ${reconHtml(s)}
+      ${s.discussion ? `<details class="text"><summary>NHC forecast discussion${s.adv_num ? ` · advisory ${s.adv_num}` : ""}</summary><pre>${esc(s.discussion)}</pre></details>` : ""}
+      ${s.public_advisory ? `<details class="text"><summary>NHC public advisory${s.adv_num ? ` · ${s.adv_num}` : ""}</summary><pre>${esc(s.public_advisory)}</pre></details>` : ""}
       ${overview ? `<div class="graphic"><img src="${BASE + overview}?v=${encodeURIComponent(data.generated)}" alt="Basin overview" loading="lazy"></div>` : ""}
     `;
   }

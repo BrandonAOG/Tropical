@@ -55,6 +55,7 @@ ADECK = "https://ftp.nhc.noaa.gov/atcf/aid_public/a{sid}.dat.gz"
 BDECK = "https://ftp.nhc.noaa.gov/atcf/btk/b{sid}.dat"
 CONE = "https://www.nhc.noaa.gov/gis/forecast/archive/{sid}_5day_latest.zip"
 GTWO = "https://www.nhc.noaa.gov/xgtwo/gtwo_shapefiles.zip"     # outlook areas with 2/7-day probabilities
+FDECK = "https://ftp.nhc.noaa.gov/atcf/fix/f{sid}.dat"           # position/intensity fixes: aircraft, dropsonde, satellite
 INVEST_MAX_AGE_H = 30                                           # a-deck must have been touched this recently
 
 # ATCF "tech" codes -> display. Order here = legend order. Colours chosen so
@@ -150,6 +151,47 @@ def pick_tracks(adeck, max_lag_h=12):
     return newest, tracks
 
 
+FIX_KIND = {"AIRC": "aircraft", "DRPS": "dropsonde", "DVTS": "Dvorak (subj.)", "DVTO": "Dvorak (obj.)", "ADT": "ADT",
+            "SSMI": "microwave", "SSMS": "microwave", "AMSU": "microwave", "TRMM": "microwave", "GPMI": "microwave", "WSAT": "microwave",
+            "ASCT": "scatterometer", "RDRC": "radar", "RDRD": "radar", "RDRT": "radar", "SYNP": "synoptic", "ANAL": "analysis"}
+
+
+def parse_fdeck(text: str):
+    """NHC f-deck: one fix per line. Returns [{time, kind, lat, lon, vmax, mslp}] newest first."""
+    fixes = []
+    for line in text.splitlines():
+        f = [x.strip() for x in line.split(",")]
+        if len(f) < 14 or len(f[2]) < 12 or not f[7] or not f[8]:
+            continue
+        try:
+            t = dt.datetime.strptime(f[2][:12], "%Y%m%d%H%M")
+            lat = int(f[7][:-1]) / 100 * (1 if f[7][-1] == "N" else -1)
+            lon = int(f[8][:-1]) / 100 * (-1 if f[8][-1] == "W" else 1)
+        except ValueError:
+            continue
+        if lat == 0 and lon == 0:
+            continue
+        vmax = int(f[11]) if f[11].isdigit() else None
+        mslp = int(f[13]) if f[13].isdigit() else None
+        fixes.append({"time": t, "kind": FIX_KIND.get(f[4], f[4]), "code": f[4], "lat": lat, "lon": lon, "vmax": vmax, "mslp": mslp})
+    fixes.sort(key=lambda x: x["time"], reverse=True)
+    return fixes
+
+
+def fetch_text_product(session, url: str) -> str | None:
+    """NHC text products (discussion, public advisory): the content is in a <pre> block."""
+    import html as _html, re as _re
+    try:
+        r = session.get(url, timeout=30)
+        if r.status_code != 200:
+            return None
+        m = _re.search(r"<pre[^>]*>(.*?)</pre>", r.text, _re.S | _re.I)
+        txt = _html.unescape(_re.sub(r"<[^>]+>", "", m.group(1) if m else r.text)).strip()
+        return txt[:20000] if txt else None
+    except requests.RequestException:
+        return None
+
+
 def read_cone(zbytes: bytes):
     """Polygon(s) of the NHC forecast cone from the GIS zip. Returns list of
     (lons, lats) or [] if anything goes wrong — the cone is a nice-to-have."""
@@ -187,6 +229,28 @@ def extent_for(tracks, btrack, pad=4):
     cx, cy = (lo0 + lo1) / 2, (la0 + la1) / 2
     w = max(w, h * 1.5); h = max(h, w / 1.5)
     return (cx - w / 2 - pad, cx + w / 2 + pad, max(cy - h / 2 - pad, -5), min(cy + h / 2 + pad, 70))
+
+
+def plot_fixes(ax, fixes, since_h=36):
+    """Recon and satellite fixes from the last `since_h` hours: aircraft as red
+    crosses, dropsondes as small triangles, satellite/other as grey dots."""
+    if not fixes:
+        return []
+    cutoff = fixes[0]["time"] - dt.timedelta(hours=since_h)
+    handles = []; seen = set()
+    for fx in fixes:
+        if fx["time"] < cutoff:
+            break
+        if fx["code"] == "AIRC":
+            mk, col, lab = "x", "#c81e1e", "Aircraft fix"
+        elif fx["code"] == "DRPS":
+            mk, col, lab = "^", "#b86a00", "Dropsonde"
+        else:
+            mk, col, lab = ".", "#666", "Satellite / other fix"
+        ax.plot(fx["lon"], fx["lat"], mk, ms=7 if mk != "." else 5, color=col, mew=1.6, transform=PC, zorder=8, alpha=0.85)
+        if lab not in seen:
+            seen.add(lab); handles.append(plt.Line2D([], [], color=col, marker=mk, ls="", ms=7, mew=1.6, label=lab))
+    return handles
 
 
 def plot_track(storm, newest, tracks, btrack, cone, dest: Path):
@@ -229,6 +293,7 @@ def plot_track(storm, newest, tracks, btrack, cone, dest: Path):
         lag = f"  ({tr['cycle'][-2:]}Z)" if tr["lag"] else ""
         handles.append(plt.Line2D([], [], color=color, lw=lw, ls=ls, label=label + lag))
 
+    handles += plot_fixes(ax, storm.get("_fixes", []))
     if btrack:
         b = np.array([(lo, la) for _, la, lo, *_ in btrack])
         ax.plot(b[:, 0], b[:, 1], color="#222", lw=2.2, transform=PC, zorder=9)
@@ -340,6 +405,9 @@ def load_storms(session):
             "movement": f"{s.get('movementDir', '')}° at {s.get('movementSpeed', '')} kt",
             "advisory": s.get("lastUpdate"),
             "nhc_url": f"https://www.nhc.noaa.gov/graphics_{'at' if sid[:2]=='al' else 'ep'}{sid[3]}.shtml",
+            "_disc_url": (s.get("forecastDiscussion") or {}).get("url"),
+            "_pub_url": (s.get("publicAdvisory") or {}).get("url"),
+            "_adv_num": (s.get("publicAdvisory") or {}).get("advNum"),
         })
     return out
 
@@ -540,6 +608,15 @@ def main():
                 cone_bytes = session.get(CONE.format(sid=s["id"]), timeout=60).content
             except Exception:  # noqa: BLE001
                 cone_bytes = b""
+            try:
+                rf = session.get(FDECK.format(sid=s["id"]), timeout=60)
+                s["_fixes"] = parse_fdeck(rf.text) if rf.status_code == 200 else []
+            except Exception as e:  # noqa: BLE001
+                log.warning("no f-deck for %s: %s", s["id"], e); s["_fixes"] = []
+            if s.get("_disc_url"):
+                s["_discussion"] = fetch_text_product(session, s["_disc_url"])
+            if s.get("_pub_url"):
+                s["_public"] = fetch_text_product(session, s["_pub_url"])
             decks[s["id"]] = (a_text, b_text, cone_bytes)
 
     from plots import _basemap_layers
@@ -562,6 +639,20 @@ def main():
         s["_tracks"], s["_btrack"], s["_cone"] = tracks, btrack, cone
         sdir = OUT / s["id"]; sdir.mkdir(exist_ok=True)
         entry = {k: v for k, v in s.items() if not k.startswith("_")}
+        fixes = s.get("_fixes", [])
+        if fixes:
+            def fx_json(fx):
+                return {"time": fx["time"].isoformat() + "Z", "kind": fx["kind"], "lat": fx["lat"], "lon": fx["lon"], "vmax": fx["vmax"], "mslp": fx["mslp"]}
+            air = [fx for fx in fixes if fx["code"] in ("AIRC", "DRPS")]
+            entry["last_fix"] = fx_json(fixes[0])
+            entry["last_aircraft_fix"] = fx_json(air[0]) if air else None
+            entry["recent_fixes"] = [fx_json(fx) for fx in fixes[:12]]
+        if s.get("_discussion"):
+            entry["discussion"] = s["_discussion"]
+        if s.get("_public"):
+            entry["public_advisory"] = s["_public"]
+        if s.get("_adv_num"):
+            entry["adv_num"] = s["_adv_num"]
         if newest:
             plot_track(s, newest, tracks, btrack, cone, sdir / "track.png")
             plot_intensity(s, newest, tracks, btrack, sdir / "intensity.png")
