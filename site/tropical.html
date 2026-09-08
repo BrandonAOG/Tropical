@@ -224,10 +224,16 @@
 
   <section class="outlook">
     <h3>ENSO, global tropics &amp; MJO</h3>
-    <a class="graphic ext" href="https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/" target="_blank" rel="noopener" title="CPC ENSO outlook: probabilities by strength">
-      <img id="ensoImg" alt="CPC ENSO outlook — probabilities of El Niño / La Niña by strength and season" loading="lazy">
-      <span class="fallback">CPC ENSO outlook (El Niño / La Niña probabilities) →</span>
-    </a>
+    <div class="two">
+      <a class="graphic ext" href="https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/" target="_blank" rel="noopener" title="CPC official ENSO probabilities">
+        <img id="ensoProbs" alt="CPC official ENSO probabilities — El Niño, neutral, La Niña by season" loading="lazy">
+        <span class="fallback">CPC ENSO probabilities →</span>
+      </a>
+      <a class="graphic ext" href="https://www.cpc.ncep.noaa.gov/products/analysis_monitoring/enso_advisory/" target="_blank" rel="noopener" title="CPC ENSO outlook: probabilities by strength">
+        <img id="ensoImg" alt="CPC ENSO outlook — probabilities of El Niño / La Niña by strength and season" loading="lazy">
+        <span class="fallback">CPC ENSO outlook by strength →</span>
+      </a>
+    </div>
     <div class="two" style="margin-top:14px">
       <a class="graphic ext" href="https://www.cpc.ncep.noaa.gov/products/precip/CWlink/ghazards/" target="_blank" rel="noopener" title="CPC Global Tropics Hazards Outlook">
         <img src="https://www.cpc.ncep.noaa.gov/products/precip/CWlink/ghaz/gth_full.png" alt="CPC Global Tropics Hazards Outlook (weeks 2–3)" loading="lazy">
@@ -265,7 +271,7 @@
         </div>
       </div>
     </div>
-    <p class="attribution">The ENSO chart is CPC's official outlook: the chance of El Niño or La Niña by strength for each coming season. The Global Tropics Hazards Outlook is CPC's week 2–3 view of where tropical cyclone formation and heavy rain are favoured. The MJO diagrams show which phase the Madden–Julian Oscillation is in and where it's heading — phases 1–2 (and 8) tend to favour Atlantic development, 4–6 suppress it. The hazards map is served live from NOAA CPC; the MJO charts and wave frames are copied from the Australian Bureau of Meteorology (CC BY) each cycle.</p>
+    <p class="attribution">The ENSO charts are CPC's monthly official outlook (issued the second Thursday): left, the chance of El Niño, neutral or La Niña each season; right, the same broken down by strength. The Global Tropics Hazards Outlook is CPC's week 2–3 view of where tropical cyclone formation and heavy rain are favoured. The MJO diagrams show which phase the Madden–Julian Oscillation is in and where it's heading — phases 1–2 (and 8) tend to favour Atlantic development, 4–6 suppress it. The hazards map is served live from NOAA CPC; the MJO charts and wave frames are copied from the Australian Bureau of Meteorology (CC BY) each cycle.</p>
     <p class="attribution">Track and intensity guidance is drawn from the NHC ATCF a-deck, the same guidance file NHC forecasters use. Model availability varies by storm and cycle; a model shown dashed came from an earlier cycle than the newest one available. This is model output, not a forecast — for official forecasts and warnings see the <a href="https://www.nhc.noaa.gov/">National Hurricane Center</a>.</p>
   </section>
 </main>
@@ -331,10 +337,19 @@
     `;
   }
 
-  // CPC files its ENSO chart under the current year
-  (() => { const y = new Date().getUTCFullYear(); const im = $("ensoImg");
-           im.src = `https://www.cpc.ncep.noaa.gov/archives/enso/roni/images/${y}/enso-strengths-probs-current.png`;
-           im.addEventListener("error", () => { if (!im.dataset.retried) { im.dataset.retried = 1; im.src = im.src.replace(`/${y}/`, `/${y - 1}/`); } }, { once: false }); })();
+  // CPC's ENSO charts: the strength chart is always "current" (filed by year); the classic
+  // probability bars are stamped MMYYYY, issued mid-month, so step back until one exists.
+  (() => {
+    const now = new Date(); const y = now.getUTCFullYear();
+    const im = $("ensoImg");
+    im.src = `https://www.cpc.ncep.noaa.gov/archives/enso/roni/images/${y}/enso-strengths-probs-current.png`;
+    im.addEventListener("error", () => { if (!im.dataset.retried) { im.dataset.retried = 1; im.src = im.src.replace(`/${y}/`, `/${y - 1}/`); } });
+    const pb = $("ensoProbs"); let tries = 0;
+    const setMonth = (d) => { const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+      pb.src = `https://www.cpc.ncep.noaa.gov/archives/enso/roni/images/${d.getUTCFullYear()}/enso-probs-${mm}${d.getUTCFullYear()}.png`; };
+    let d = new Date(Date.UTC(y, now.getUTCMonth(), 1)); setMonth(d);
+    pb.addEventListener("error", () => { if (++tries <= 3) { d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1)); setMonth(d); } });
+  })();
   // external agency images sometimes move: show a link instead of a broken picture
   document.querySelectorAll(".graphic.ext img").forEach(img => img.addEventListener("error", () => img.closest(".graphic").classList.add("broken")));
 
