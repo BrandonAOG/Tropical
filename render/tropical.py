@@ -396,9 +396,12 @@ def read_outlook_areas(session):
                     continue
                 p2 = rec.get("PROB2DAY") or rec.get("prob2day") or ""
                 p7 = rec.get("PROB7DAY") or rec.get("prob7day") or ""
+                raw = str(rec.get("BASIN", rec.get("basin", ""))).strip().lower()
+                basin = "al" if raw.startswith(("al", "atl")) else "ep" if raw.startswith(("ep", "pac", "east")) else "cp" if raw.startswith(("cp", "cent")) else None
+                if basin is None:                     # fall back to geography
+                    basin = "al" if pts[:, 0].mean() > -100 else "ep"
                 out.append({"lons": pts[:, 0], "lats": pts[:, 1], "prob2": str(p2).strip(), "prob7": str(p7).strip(),
-                            "basin": str(rec.get("BASIN", rec.get("basin", ""))).strip().lower() or ("al" if pts[:, 0].mean() > -100 else "ep"),
-                            "area": str(rec.get("AREA", rec.get("area", ""))).strip()})
+                            "basin": basin, "area": str(rec.get("AREA", rec.get("area", ""))).strip()})
         return out
     except Exception as e:  # noqa: BLE001
         log.warning("outlook areas unavailable: %s", e)

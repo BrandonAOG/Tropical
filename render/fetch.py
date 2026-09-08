@@ -748,15 +748,30 @@ def aigefs_url(run: dt.datetime, fhr: int, member: str, ftype: str = "pres") -> 
     return MODEL["path"].format(ymd=run.strftime("%Y%m%d"), hh=run.strftime("%H"), mem=n, fhr=fhr).replace(".pres.", f".{ftype}.")
 
 
+AIGEFS_TYPE_CANDIDATES = ["pres", "sfc", "surface", "flux", "2d", "sflux", "pgrb2", "atm"]
+
+
 def aigefs_file_types(run: dt.datetime, session) -> list:
-    """Distinct file types in a member's grib2 folder, e.g. ['pres', 'sfc']."""
+    """File types available for this run (e.g. ['pres', 'sfc']). Tries the folder
+    listing, then probes candidate names by HEAD on their .idx, since NOMADS often
+    won't answer directory listings under load."""
     global _AIGEFS_TYPES
     if _AIGEFS_TYPES is not None:
         return _AIGEFS_TYPES
     folder = aigefs_url(run, 0, "c00").rsplit("/", 1)[0] + "/"
-    names = [f for f in _listing(session, folder, retries=2, timeout=30) if f.endswith(".grib2")]
+    names = [f for f in _listing(session, folder, retries=1, timeout=20) if f.endswith(".grib2")]
     types = sorted({f.split(".")[2] for f in names if f.count(".") >= 4})
-    log.info("AI-GEFS file types in %s: %s (%d files)", folder, types or "listing unavailable", len(names))
+    if not types:
+        for t in AIGEFS_TYPE_CANDIDATES:
+            try:
+                r = session.head(aigefs_url(run, 6, "c00", t) + ".idx", timeout=20)
+                if r.status_code == 200:
+                    types.append(t)
+            except requests.RequestException:
+                pass
+        log.info("AI-GEFS file types (probed): %s", types)
+    else:
+        log.info("AI-GEFS file types (listed): %s", types)
     _AIGEFS_TYPES = types or ["pres"]
     return _AIGEFS_TYPES
 
