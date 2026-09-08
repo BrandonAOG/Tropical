@@ -405,6 +405,45 @@ def read_outlook_areas(session):
         return []
 
 
+BOM_WAVES = "https://www.bom.gov.au/clim_data/IDCK000080/{wave}.tropical_waves.daily.glb_tropics.{ymd}.hr.png"
+BOM_WAVE_TYPES = [("mjo", "Madden-Julian Oscillation"), ("kelvin", "Kelvin wave"), ("eq_rossby", "Equatorial Rossby wave"), ("gravity", "Mixed Rossby-gravity wave")]
+
+
+def fetch_bom_waves(session, out_dir: Path, back_days: int = 30, ahead_days: int = 45) -> list:
+    """BoM 'tropical atmospheric waves' daily frames — one image per wave type
+    (MJO, Kelvin, equatorial Rossby, MRG) per day, observed and forecast days.
+    Returns [{date, images: {type: path}}]. Cached on disk between runs. CC BY (BoM)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    today = dt.datetime.now(dt.timezone.utc).date()
+    frames, misses, seen_types = [], 0, set()
+    for k in range(-back_days, ahead_days + 1):
+        d = today + dt.timedelta(days=k); ymd = d.strftime("%Y%m%d")
+        images = {}
+        for wave, _ in BOM_WAVE_TYPES:
+            dest = out_dir / f"{wave}_{ymd}.png"
+            if not dest.exists():
+                try:
+                    r = session.get(BOM_WAVES.format(wave=wave, ymd=ymd), timeout=30)
+                    if r.status_code == 200 and len(r.content) > 5000:
+                        dest.write_bytes(r.content)
+                    else:
+                        continue
+                except requests.RequestException:
+                    continue
+            images[wave] = f"images/mjo/{dest.name}"; seen_types.add(wave)
+        if not images:
+            misses += 1
+            if k > 0 and misses > 6:                  # past the end of the forecast frames
+                break
+            continue
+        misses = 0
+        frames.append({"date": d.isoformat(), "images": images})
+    missing_types = [w for w, _ in BOM_WAVE_TYPES if w not in seen_types]
+    log.info("BoM tropical waves: %d frames; types found %s%s", len(frames), sorted(seen_types),
+             f"; NOT found (name guess wrong?): {missing_types}" if missing_types else "")
+    return frames
+
+
 def synthetic_storm():
     """One fake Atlantic hurricane with a plausible a-deck for testing."""
     rng = np.random.default_rng(7)
@@ -512,6 +551,11 @@ def main():
         dest = OUT / f"overview_{basin}.png"
         plot_overview(basin, [s for s in storms if s["basin"] == basin], dest, areas)
         result["overviews"][basin] = f"images/tropical/overview_{basin}.png"
+    if not args.synthetic:
+        try:
+            result["mjo_frames"] = fetch_bom_waves(session, SITE / "images" / "mjo")
+        except Exception as e:  # noqa: BLE001
+            log.warning("BoM waves unavailable: %s", e)
     result["areas"] = [{"basin": a["basin"], "prob2": a["prob2"], "prob7": a["prob7"],
                         "lat": round(float(np.mean(a["lats"])), 1), "lon": round(float(np.mean(a["lons"])), 1)} for a in areas]
 

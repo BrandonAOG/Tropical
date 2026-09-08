@@ -71,6 +71,25 @@
   .area b { font-family: "Barlow Condensed", sans-serif; font-size: 20px; font-weight: 700; }
   .area .lo { color: #b58f00; } .area .md { color: #e07b00; } .area .hi { color: var(--hu); }
   section.outlook { margin-top: 30px; }
+  .waves { margin-top: 16px; display: grid; gap: 10px; }
+  .waves h3 { margin: 0; }
+  .wavestack { display: grid; gap: 0; }
+  .wavestack img { display: block; width: 100%; height: auto; }
+  .transport { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 18px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; }
+  .readout .valid { font-size: 13px; color: var(--muted); line-height: 1.25; min-width: 200px; }
+  .readout .valid b { display: block; color: var(--ink); font-weight: 600; font-size: 15px; }
+  .ticks { display: flex; gap: 2px; align-items: flex-end; height: 34px; min-width: 0; overflow: hidden; touch-action: none; cursor: ew-resize; user-select: none; }
+  .ticks button { flex: 1 1 0; height: 100%; position: relative; border-radius: 3px; min-width: 0; padding: 0; }
+  .ticks button::before { content: ""; position: absolute; left: 50%; bottom: 8px; width: 2px; height: 10px; background: var(--line); transform: translateX(-50%); }
+  .ticks button.today::before { background: var(--amber); height: 18px; border-left: 1px dashed var(--amber); width: 0; }
+  .ticks button.active::before { background: var(--teal); height: 22px; width: 4px; border-radius: 2px; }
+  .ticks { padding: 0 14px; }
+  .ticks button:nth-child(7n+1)::after { content: attr(data-l); position: absolute; left: 50%; bottom: -4px; transform: translateX(-50%); font-size: 10px; color: var(--muted); white-space: nowrap; }
+  .controls { display: flex; gap: 4px; }
+  .controls button { width: 36px; height: 36px; border-radius: var(--radius); display: grid; place-items: center; border: 1px solid var(--line); }
+  .controls button.play { background: var(--teal); color: #fff; border-color: var(--teal); width: 44px; }
+  .controls svg { width: 16px; height: 16px; fill: currentColor; }
+  @media (max-width: 860px) { .transport { grid-template-columns: 1fr 1fr; } .ticks { grid-column: 1 / -1; height: 44px; } }
   .graphic.ext { position: relative; min-height: 60px; display: block; }
   .graphic.ext .fallback { display: none; padding: 18px; color: var(--teal); font-weight: 600; }
   .graphic.ext.broken img { display: none; } .graphic.ext.broken .fallback { display: block; }
@@ -223,6 +242,21 @@
         <span class="fallback">CPC 200 hPa velocity potential →</span>
       </a>
     </div>
+    <div id="waves" class="waves" hidden>
+      <h3>Tropical atmospheric waves — MJO, Kelvin, equatorial Rossby, MRG (BoM)</h3>
+      <div class="graphic wavestack" id="wavesStack"></div>
+      <div class="transport">
+        <div class="readout"><div class="valid"><b id="wavesDate">—</b><span>frame <span id="wavesIdx">0</span> / <span id="wavesN">0</span> · dashed marker = today</span></div></div>
+        <div class="ticks" id="wavesTicks" role="tablist" aria-label="Days"></div>
+        <div class="controls">
+          <button id="wFirst" aria-label="First"><svg viewBox="0 0 16 16"><path d="M3 2h2v12H3zM13 2v12L6 8z"/></svg></button>
+          <button id="wPrev" aria-label="Previous"><svg viewBox="0 0 16 16"><path d="M11 2v12L4 8z"/></svg></button>
+          <button id="wPlay" class="play" aria-label="Play"><svg id="wPlayIcon" viewBox="0 0 16 16"><path d="M4 2l10 6-10 6z"/></svg></button>
+          <button id="wNext" aria-label="Next"><svg viewBox="0 0 16 16"><path d="M5 2v12l7-6z"/></svg></button>
+          <button id="wLast" aria-label="Last"><svg viewBox="0 0 16 16"><path d="M11 2h2v12h-2zM3 2v12l7-6z"/></svg></button>
+        </div>
+      </div>
+    </div>
     <p class="attribution">The Global Tropics Hazards Outlook is CPC's week 2–3 view of where tropical cyclone formation and heavy rain are favoured. The MJO diagrams show which phase the Madden–Julian Oscillation is in and where it's heading — phases 1–2 (and 8) tend to favour Atlantic development, 4–6 suppress it. All images are served live from NOAA CPC and the Australian Bureau of Meteorology.</p>
     <p class="attribution">Track and intensity guidance is drawn from the NHC ATCF a-deck, the same guidance file NHC forecasters use. Model availability varies by storm and cycle; a model shown dashed came from an earlier cycle than the newest one available. This is model output, not a forecast — for official forecasts and warnings see the <a href="https://www.nhc.noaa.gov/">National Hurricane Center</a>.</p>
   </section>
@@ -292,6 +326,45 @@
   // external agency images sometimes move: show a link instead of a broken picture
   document.querySelectorAll(".graphic.ext img").forEach(img => img.addEventListener("error", () => img.closest(".graphic").classList.add("broken")));
 
+  function wavesPlayer(frames) {
+    if (!frames || !frames.length) return;
+    $("waves").hidden = false;
+    const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const today = new Date().toISOString().slice(0, 10);
+    let i = Math.max(0, frames.findIndex(f => f.date >= today)); let timer = null;
+    const ticks = $("wavesTicks"); $("wavesN").textContent = frames.length;
+    frames.forEach((f, k) => {
+      const b = document.createElement("button"); const d = new Date(f.date + "T00:00Z");
+      b.dataset.l = `${d.getUTCDate()} ${MON[d.getUTCMonth()]}`; b.title = f.date;
+      if (f.date === today) b.classList.add("today");
+      b.onclick = () => { stop(); show(k); }; ticks.appendChild(b);
+    });
+    const TYPES = ["mjo", "kelvin", "eq_rossby", "gravity"];
+    const stack = $("wavesStack");
+    TYPES.forEach(w => { const im = document.createElement("img"); im.dataset.w = w; im.alt = w + " wave"; stack.appendChild(im); });
+    frames.forEach(f => Object.values(f.images || {}).forEach(src => { const im = new Image(); im.src = BASE + src; }));
+    function show(k) {
+      i = (k + frames.length) % frames.length;
+      const f = frames[i]; const d = new Date(f.date + "T00:00Z");
+      [...stack.children].forEach(im => { const src = (f.images || {})[im.dataset.w]; im.hidden = !src; if (src) im.src = BASE + src; });
+      $("wavesIdx").textContent = i + 1;
+      $("wavesDate").textContent = `${d.toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" })} ${d.getUTCDate()} ${MON[d.getUTCMonth()]} ${d.getUTCFullYear()}` + (f.date > today ? "  (forecast)" : "");
+      [...ticks.children].forEach((b, k2) => b.classList.toggle("active", k2 === i));
+    }
+    const PLAY = '<path d="M4 2l10 6-10 6z"/>', PAUSE = '<path d="M3 2h4v12H3zM9 2h4v12H9z"/>';
+    function play() { $("wPlayIcon").innerHTML = PAUSE; timer = setInterval(() => show(i + 1), 450); }
+    function stop() { clearInterval(timer); timer = null; $("wPlayIcon").innerHTML = PLAY; }
+    $("wPlay").onclick = () => timer ? stop() : play();
+    $("wPrev").onclick = () => { stop(); show(i - 1); }; $("wNext").onclick = () => { stop(); show(i + 1); };
+    $("wFirst").onclick = () => { stop(); show(0); }; $("wLast").onclick = () => { stop(); show(frames.length - 1); };
+    // drag to scrub
+    let scrub = false; const idxAt = (x) => { const r = ticks.getBoundingClientRect(); return Math.max(0, Math.min(frames.length - 1, Math.floor((x - r.left) / r.width * frames.length))); };
+    ticks.addEventListener("pointerdown", (e) => { scrub = true; stop(); ticks.setPointerCapture(e.pointerId); show(idxAt(e.clientX)); e.preventDefault(); });
+    ticks.addEventListener("pointermove", (e) => { if (scrub) { const k = idxAt(e.clientX); if (k !== i) show(k); } });
+    ticks.addEventListener("pointerup", () => scrub = false); ticks.addEventListener("pointercancel", () => scrub = false);
+    show(i);
+  }
+
   async function boot() {
     try {
       const r = await fetch(BASE + "tropical.json", { cache: "no-store" });
@@ -307,6 +380,7 @@
       $("empty").hidden = false;
       $("empty").innerHTML = "<strong>No active tropical cyclones or invests</strong>Nothing is currently being tracked by NHC in the Atlantic or Pacific. Check the outlooks below for areas to watch.";
       renderAreas();
+      wavesPlayer(data.mjo_frames);
       const ov = data.overviews?.al;
       if (ov) $("detail").hidden = false, $("detail").innerHTML = `<div class="graphic"><img src="${BASE + ov}?v=${encodeURIComponent(data.generated)}" alt="Atlantic overview"></div>`;
       return;
@@ -314,6 +388,7 @@
     renderStrip();
     select(location.hash.replace("#", ""));
     renderAreas();
+    wavesPlayer(data.mjo_frames);
   }
 
   function renderAreas() {
